@@ -191,13 +191,91 @@
       .replace(/'/g, "&#039;");
   }
 
+  async function findRecordedAnswer(entry) {
+    try {
+      const loaded = await chromeGet(STORAGE_KEY);
+      const records = Array.isArray(loaded) ? loaded : [];
+      const targetQuestion = cleanSearchText(entry.question).normalize("NFC");
+
+      const matches = records.filter((record) => {
+        const question = cleanSearchText(record?.question || "").normalize("NFC");
+        const answer = normalizeAnswer(record?.answer);
+        const recordLength = Number(record?.length);
+        return question && answer && question === targetQuestion &&
+          (!Number.isInteger(entry.length) ||
+           !Number.isInteger(recordLength) ||
+           recordLength === entry.length);
+      }).sort((a, b) => {
+        const at = Date.parse(a?.savedAt || "") || 0;
+        const bt = Date.parse(b?.savedAt || "") || 0;
+        return bt - at;
+      });
+
+      return matches[0] || null;
+    } catch (error) {
+      console.warn("[KKuTu 기록기] 기존 정답 확인 실패:", error.message);
+      return null;
+    }
+  }
+
+  function showRecordedAnswer(entry, record) {
+    if (!entry || !record) return;
+
+    let panel = state.candidatePanel;
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.id = "__kkutuRecorderCandidates";
+      Object.assign(panel.style, {
+        position: "fixed",
+        left: "18px",
+        bottom: "18px",
+        zIndex: "2147483647",
+        width: "320px",
+        maxWidth: "calc(100vw - 36px)",
+        padding: "12px",
+        border: "1px solid rgba(0,0,0,.12)",
+        borderRadius: "10px",
+        background: "rgba(20,20,20,.94)",
+        color: "#fff",
+        fontSize: "12px",
+        lineHeight: "1.45",
+        boxShadow: "0 6px 18px rgba(0,0,0,.28)",
+        pointerEvents: "auto"
+      });
+      (document.body || document.documentElement).appendChild(panel);
+      state.candidatePanel = panel;
+    }
+
+    panel.innerHTML =
+      "<div style=\"font-weight:700;font-size:13px;color:#8ee28e;\">기록된 정답</div>" +
+      "<div style=\"margin-top:4px;opacity:.75;\">" +
+        escapeForHtml(entry.question) +
+        "</div>" +
+      "<div style=\"margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(142,226,142,.14);text-align:center;\">" +
+        "<div style=\"font-size:22px;font-weight:800;\">" +
+          escapeForHtml(record.answer) +
+        "</div>" +
+        "<div style=\"margin-top:3px;opacity:.7;\">" +
+          escapeForHtml(record.playerName || "") +
+          " · 이미 맞힌 기록</div>" +
+      "</div>";
+  }
+
   function requestCandidates(entry) {
     if (!entry || !isExtensionAlive()) return;
 
     clearTimeout(state.candidateTimer);
     showCandidatePanel(entry, [], false);
 
-    state.candidateTimer = setTimeout(() => {
+    state.candidateTimer = setTimeout(async () => {
+      const recorded = await findRecordedAnswer(entry);
+
+      if (recorded) {
+        console.log("[KKuTu 기록기] 기존 정답 즉시 표시:", recorded.answer);
+        showRecordedAnswer(entry, recorded);
+        return;
+      }
+
       chrome.runtime.sendMessage({
         type: "kkutuSearchCandidates",
         sessionId: entry.sessionId,
