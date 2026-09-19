@@ -27,6 +27,7 @@ function unique(values) {
 function extractQueries(question) {
   const cleaned = cleanText(question)
     .replace(/★+/g, " ")
+    .replace(/[0-9０-９]+/g, " ")
     .replace(/[“”"'‘’()[\]{}<>]/g, " ")
     .replace(/[.,!?;:/·=~]/g, " ")
     .replace(/\s+/g, " ")
@@ -110,7 +111,7 @@ function scoreCandidate(candidate, question, length) {
 
   const tokens = clue
     .split(" ")
-    .map((v) => v.replace(/[^가-힣A-Za-z0-9]/g, ""))
+    .map((v) => v.replace(/[^가-힣]/g, ""))
     .filter((v) => v.length >= 2);
 
   for (const token of tokens) {
