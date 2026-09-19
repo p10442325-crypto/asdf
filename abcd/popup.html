@@ -59,6 +59,28 @@
       border-color: #d99;
     }
 
+    .api-box {
+      margin-bottom: 12px;
+      padding: 10px;
+      border-radius: 8px;
+      background: white;
+      border: 1px solid #ddd;
+      font-size: 12px;
+    }
+
+    .api-box input {
+      width: 100%;
+      margin: 6px 0;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+    }
+
+    .api-status {
+      margin-top: 6px;
+      color: #666;
+    }
+
     #searchInput {
       width: 100%;
       padding: 9px;
@@ -123,6 +145,14 @@
     <button id="exportCsvButton">CSV 내보내기</button>
     <button id="refreshButton">새로고침</button>
     <button id="clearButton" class="danger">전체 삭제</button>
+  </div>
+
+  <div class="api-box">
+    <strong>표준국어대사전 후보 검색</strong>
+    <input id="apiKeyInput" type="password" placeholder="32자리 API 인증키" />
+    <button id="saveApiKeyButton">API 키 저장</button>
+    <button id="clearApiKeyButton">키 삭제</button>
+    <div id="apiStatus" class="api-status"></div>
   </div>
 
   <input
