@@ -35,14 +35,17 @@ function extractQueries(question) {
 
   if (!cleaned) return [];
 
-  const whole = cleaned.length <= 80 ? [cleaned] : [];
   const tokens = cleaned
     .split(" ")
     .map((v) => v.replace(/[^가-힣]/g, ""))
     .filter((v) => v.length >= 2)
     .sort((a, b) => b.length - a.length);
 
-  return unique([...whole, ...tokens.slice(0, 3)]).slice(0, 4);
+  const whole = cleaned.length <= 80 ? [cleaned] : [];
+
+  // Prefer long distinctive words. The full clue often contains a ★ hole,
+  // so an include search for the whole clue is less useful as the first call.
+  return unique([...tokens.slice(0, 3), ...whole]).slice(0, 4);
 }
 
 async function apiSearch(apiKey, query, length) {
@@ -84,54 +87,225 @@ async function apiSearch(apiKey, query, length) {
       ? [data.channel.item]
       : [];
 
-  return items.map((item) => {
-    const sense = Array.isArray(item?.sense)
-      ? item.sense[0]
-      : item?.sense || {};
+  const results = [];
 
-    return {
-      word: cleanText(item?.word),
-      definition: cleanText(sense?.definition),
-      pos: cleanText(sense?.pos || item?.pos),
-      type: cleanText(sense?.type || item?.type),
-      link: sense?.link || item?.link || null
-    };
-  }).filter((item) => item.word);
-}
+  for (const item of items) {
+    const senses = Array.isArray(item?.sense)
+      ? item.sense
+      : item?.sense
+        ? [item.sense]
+        : [];
 
-function scoreCandidate(candidate, question, length) {
-  const answer = normalizeAnswer(candidate.word);
-  const clue = cleanText(question).replace(/★+/g, " ");
-  if (!answer) return -Infinity;
+    if (senses.length === 0) {
+      const word = cleanText(item?.word);
+      if (word) {
+        results.push({
+          word,
+          definition: "",
+          pos: cleanText(item?.pos),
+          type: cleanText(item?.type),
+          link: item?.link || null
+        });
+      }
+      continue;
+    }
 
-  let score = 0;
+    for (const sense of senses) {
+      const word = cleanText(item?.word);
+      const definition = cleanText(sense?.definition);
 
-  const answerSyllables = koreanLength(answer);
-  if (Number.isInteger(length) && answerSyllables === length) score += 80;
+      if (!word || !definition) continue;
 
-  const tokens = clue
-    .split(" ")
-    .map((v) => v.replace(/[^가-힣]/g, ""))
-    .filter((v) => v.length >= 2);
-
-  for (const token of tokens) {
-    if (candidate.definition.includes(token)) {
-      score += Math.min(token.length * 5, 25);
+      results.push({
+        word,
+        definition,
+        pos: cleanText(sense?.pos || item?.pos),
+        type: cleanText(sense?.type || item?.type),
+        link: sense?.link || item?.link || null,
+        senseOrder: sense?.sense_order ?? null
+      });
     }
   }
 
-  if (candidate.pos) score += 1;
+  return results;
+}
+
+function normalizeMatchText(value) {
+  return cleanText(value)
+    .normalize("NFC")
+    .replace(/★+/g, "★")
+    .replace(/[0-9０-９]+/g, " ")
+    .replace(/[^가-힣★]/g, "")
+    .trim();
+}
+
+function parseKkutuMeanVariants(rawMean, fallbackQuestion = "") {
+  const raw = String(rawMean ?? "");
+
+  if (!raw || raw.indexOf("＂") === -1) {
+    const fallback = normalizeMatchText(
+      cleanText(fallbackQuestion).replace(/★+/g, "★")
+    );
+    return fallback ? [fallback] : [];
+  }
+
+  const variants = [];
+  const groups = raw
+    .split(/＂[0-9]+＂/)
+    .slice(1);
+
+  for (const group of groups) {
+    if (group.indexOf("［") === -1) {
+      const text = normalizeMatchText(group);
+      if (text) variants.push(text);
+      continue;
+    }
+
+    const parts = group
+      .split(/［[0-9]+］/)
+      .slice(1);
+
+    for (const part of parts) {
+      const senses = part.split(/（[0-9]+）/).slice(1);
+      for (const sense of senses) {
+        const text = normalizeMatchText(sense);
+        if (text) variants.push(text);
+      }
+    }
+  }
+
+  return unique(variants);
+}
+
+function maskCandidateDefinition(definition, word) {
+  const definitionText = normalizeMatchText(definition);
+  const wordText = String(word ?? "")
+    .normalize("NFC")
+    .replace(/[^가-힣]/g, "");
+
+  if (!definitionText || !wordText) {
+    return definitionText;
+  }
+
+  if (!definitionText.includes(wordText)) {
+    return definitionText;
+  }
+
+  return definitionText.replace(wordText, "★");
+}
+
+function diceSimilarity(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.length < 2 || b.length < 2) {
+    return a === b ? 1 : 0;
+  }
+
+  const counts = new Map();
+
+  for (let i = 0; i < a.length - 1; i++) {
+    const gram = a.slice(i, i + 2);
+    counts.set(gram, (counts.get(gram) || 0) + 1);
+  }
+
+  let overlap = 0;
+
+  for (let i = 0; i < b.length - 1; i++) {
+    const gram = b.slice(i, i + 2);
+    const count = counts.get(gram) || 0;
+
+    if (count > 0) {
+      overlap++;
+      counts.set(gram, count - 1);
+    }
+  }
+
+  return (2 * overlap) / (a.length + b.length - 2);
+}
+
+function clueTokens(variants) {
+  const set = new Set();
+
+  for (const variant of variants) {
+    const tokens = String(variant)
+      .replace(/★/g, " ")
+      .match(/[가-힣]{2,}/g) || [];
+
+    for (const token of tokens) {
+      set.add(token);
+    }
+  }
+
+  return [...set].sort((a, b) => b.length - a.length);
+}
+
+function scoreCandidate(candidate, question, length, rawMean) {
+  const answer = normalizeAnswer(candidate.word);
+  if (!answer) return -Infinity;
+
+  const answerSyllables = koreanLength(answer);
+  const variants = parseKkutuMeanVariants(rawMean, question);
+  const tokens = clueTokens(variants);
+
+  let score = 0;
+
+  // KKuTu replaces the answer occurrence in the dictionary definition with
+  // a single ★. Recreate that transformation and compare it directly to
+  // the original clue. This is the strongest signal available to us.
+  const maskedDefinition = maskCandidateDefinition(
+    candidate.definition,
+    candidate.word
+  );
+
+  let bestSimilarity = 0;
+
+  for (const clue of variants) {
+    if (!clue || !maskedDefinition) continue;
+
+    if (maskedDefinition === clue) {
+      score = Math.max(score, 2000);
+      bestSimilarity = 1;
+      continue;
+    }
+
+    if (maskedDefinition.includes(clue)) {
+      score = Math.max(score, 1300);
+    } else if (clue.includes(maskedDefinition)) {
+      score = Math.max(score, 1050);
+    }
+
+    bestSimilarity = Math.max(
+      bestSimilarity,
+      diceSimilarity(maskedDefinition, clue)
+    );
+  }
+
+  score += Math.round(bestSimilarity * 500);
+
+  if (Number.isInteger(length) && answerSyllables === length) {
+    score += 100;
+  }
+
+  for (const token of tokens.slice(0, 8)) {
+    if (candidate.definition.includes(token)) {
+      score += Math.min(token.length * 8, 40);
+    }
+  }
+
+  if (candidate.pos) score += 2;
+
   return score;
 }
 
-function requestCacheKey(question, length) {
+function requestCacheKey(question, length, rawMean) {
   return [
     cleanText(question).normalize("NFC").toLowerCase(),
+    String(rawMean ?? "").normalize("NFC"),
     Number.isInteger(length) ? length : ""
   ].join("|");
 }
 
-async function loadCachedCandidates(question, length) {
+async function loadCachedCandidates(question, length, rawMean) {
   const loaded = await chrome.storage.local.get({
     [CANDIDATE_STORAGE_KEY]: []
   });
@@ -140,7 +314,7 @@ async function loadCachedCandidates(question, length) {
     ? loaded[CANDIDATE_STORAGE_KEY]
     : [];
 
-  const key = requestCacheKey(question, length);
+  const key = requestCacheKey(question, length, rawMean);
   const hit = records.find(
     (record) => record?.requestKey === key
   );
@@ -148,8 +322,8 @@ async function loadCachedCandidates(question, length) {
   return hit?.candidates || null;
 }
 
-async function searchCandidates({ question, length }) {
-  const cached = await loadCachedCandidates(question, length);
+async function searchCandidates({ question, length, rawMean }) {
+  const cached = await loadCachedCandidates(question, length, rawMean);
   if (Array.isArray(cached)) {
     return {
       ok: true,
@@ -178,7 +352,8 @@ async function searchCandidates({ question, length }) {
   function mergeCandidates(items) {
     for (const candidate of items) {
       const key = normalizeAnswer(candidate.word);
-      const score = scoreCandidate(candidate, question, length);
+      const score = scoreCandidate(candidate, question, length, rawMean);
+
       if (!key || !Number.isFinite(score)) continue;
 
       const previous = map.get(key);
@@ -191,25 +366,24 @@ async function searchCandidates({ question, length }) {
     }
   }
 
-  // Fast path: one request using the full clue.
-  if (queries.length > 0) {
-    const items = await apiSearch(apiKey, queries[0], length);
-    mergeCandidates(items);
-  }
+  // Use the longest informative clue token first. Full-clue include searches
+  // are often too strict because KKuTu has replaced the answer with ★.
+  const orderedQueries = queries.length > 0
+    ? queries
+    : [];
 
-  // Only use fallback queries when the first request did not produce enough
-  // candidates. This is what keeps normal lookups close to one API request.
-  for (let i = 1; i < queries.length && map.size < 3; i++) {
+  for (let i = 0; i < orderedQueries.length && map.size < 3; i++) {
     try {
-      const items = await apiSearch(apiKey, queries[i], length);
+      const items = await apiSearch(apiKey, orderedQueries[i], length);
       mergeCandidates(items);
     } catch (error) {
+      if (i === 0) throw error;
       console.warn("[KKuTu 기록기] 보조 사전 검색 실패:", error.message);
     }
   }
 
   const candidates = [...map.values()]
-    .sort((a, b) => b.score - a.score || a.word.length - b.word.length)
+    .sort((a, b) => b.score - a.score || koreanLength(a.word) - koreanLength(b.word))
     .slice(0, 3);
 
   return {
@@ -221,6 +395,7 @@ async function searchCandidates({ question, length }) {
 }
 
 function candidateKey(record) {
+
   return [
     record?.sessionId || "",
     record?.roundIndex ?? "",
@@ -239,7 +414,7 @@ async function saveCandidates(request, result) {
   const key = candidateKey(request);
   const item = {
     ...request,
-    requestKey: requestCacheKey(request.question, request.length),
+    requestKey: requestCacheKey(request.question, request.length, request.rawMean),
     candidates: result.candidates,
     updatedAt: new Date().toISOString()
   };
