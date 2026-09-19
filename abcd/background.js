@@ -1,6 +1,10 @@
 const API_KEY_STORAGE_KEY = "kkutuStdDictApiKey";
 const CANDIDATE_STORAGE_KEY = "kkutuCrosswordCandidates";
 
+const memoryCandidateCache = new Map();
+const memoryQueryCache = new Map();
+const CACHE_LIMIT = 300;
+
 function cleanText(value) {
   return String(value ?? "")
     .replace(/\u00a0/g, " ")
@@ -116,6 +120,16 @@ function extractQueries(question) {
 }
 
 async function apiSearch(apiKey, query, length) {
+  const queryKey = [
+    query,
+    Number.isInteger(length) ? length : ""
+  ].join("|");
+
+  const memoryHit = memoryQueryCache.get(queryKey);
+  if (Array.isArray(memoryHit)) {
+    return memoryHit;
+  }
+
   const params = new URLSearchParams({
     key: apiKey,
     q: query,
@@ -193,6 +207,12 @@ async function apiSearch(apiKey, query, length) {
       });
     }
   }
+
+  if (memoryQueryCache.size >= CACHE_LIMIT) {
+    const oldestKey = memoryQueryCache.keys().next().value;
+    memoryQueryCache.delete(oldestKey);
+  }
+  memoryQueryCache.set(queryKey, results);
 
   return results;
 }
@@ -373,6 +393,12 @@ function requestCacheKey(question, length, rawMean) {
 }
 
 async function loadCachedCandidates(question, length, rawMean) {
+  const requestKey = requestCacheKey(question, length, rawMean);
+  const memoryHit = memoryCandidateCache.get(requestKey);
+  if (Array.isArray(memoryHit)) {
+    return memoryHit;
+  }
+
   const loaded = await chrome.storage.local.get({
     [CANDIDATE_STORAGE_KEY]: []
   });
@@ -386,7 +412,16 @@ async function loadCachedCandidates(question, length, rawMean) {
     (record) => record?.requestKey === key
   );
 
-  return hit?.candidates || null;
+  if (Array.isArray(hit?.candidates)) {
+    if (memoryCandidateCache.size >= CACHE_LIMIT) {
+      const oldestKey = memoryCandidateCache.keys().next().value;
+      memoryCandidateCache.delete(oldestKey);
+    }
+    memoryCandidateCache.set(requestKey, hit.candidates);
+    return hit.candidates;
+  }
+
+  return null;
 }
 
 async function searchCandidates({ question, length, rawMean }) {
@@ -441,23 +476,6 @@ async function searchCandidates({ question, length, rawMean }) {
     };
   }
 
-  // Fast path: search up to three distinctive clue words in parallel.
-  // This keeps latency close to one network round-trip while avoiding the
-  // brittle "search the entire sentence as one phrase" behavior.
-  const firstQueries = queries
-    .filter((query) => query !== cleanText(question))
-    .slice(0, 3);
-
-  const initialQueries = firstQueries.length
-    ? firstQueries
-    : queries.slice(0, 1);
-
-  const initialResults = await Promise.all(
-    initialQueries.map((query) => apiSearch(apiKey, query, length))
-  );
-
-  initialResults.forEach(mergeCandidates);
-
   function getBestScore() {
     let best = -Infinity;
     for (const candidate of map.values()) {
@@ -466,24 +484,56 @@ async function searchCandidates({ question, length, rawMean }) {
     return best;
   }
 
-  // A strong definition-level match ends the lookup. Otherwise, try up to
-  // three additional search terms, but never wait for them in the normal case.
-  if (getBestScore() < 1600) {
-    const used = new Set(initialQueries);
+  // Fast path: make only one API request first. If it already finds a strong
+  // definition match, return immediately instead of waiting for other
+  // searches.
+  try {
+    const firstItems = await apiSearch(apiKey, queries[0], length);
+    mergeCandidates(firstItems);
+  } catch (error) {
+    throw error;
+  }
 
-    const extraQueries = queries.filter(
-      (query) => !used.has(query)
-    ).slice(0, 3);
+  if (getBestScore() >= 1600) {
+    const candidates = [...map.values()]
+      .sort(
+        (a, b) =>
+          b.score - a.score ||
+          koreanLength(a.word) - koreanLength(b.word)
+      )
+      .slice(0, 3);
 
-    for (const query of extraQueries) {
-      try {
-        const items = await apiSearch(apiKey, query, length);
-        mergeCandidates(items);
+    return {
+      ok: true,
+      needsApiKey: false,
+      candidates,
+      cached: false
+    };
+  }
 
-        if (getBestScore() >= 1600) break;
-      } catch (error) {
-        console.warn("[KKuTu 기록기] 보조 사전 검색 실패:", error.message);
+  // Accuracy fallback: only when the first request is not convincing, run
+  // the next two useful terms in parallel. This keeps the worst-case recall
+  // similar while improving the common-case response time.
+  const fallbackQueries = queries.slice(1, 3);
+
+  if (fallbackQueries.length > 0) {
+    const fallbackResults = await Promise.all(
+      fallbackQueries.map((query) =>
+        apiSearch(apiKey, query, length).catch((error) => ({
+          __error: error
+        }))
+      )
+    );
+
+    for (const result of fallbackResults) {
+      if (result?.__error) {
+        console.warn(
+          "[KKuTu 기록기] 보조 사전 검색 실패:",
+          result.__error.message
+        );
+        continue;
       }
+      mergeCandidates(result);
     }
   }
 
@@ -521,12 +571,24 @@ async function saveCandidates(request, result) {
     : [];
 
   const key = candidateKey(request);
+  const requestKey = requestCacheKey(
+    request.question,
+    request.length,
+    request.rawMean
+  );
+
   const item = {
     ...request,
-    requestKey: requestCacheKey(request.question, request.length, request.rawMean),
+    requestKey,
     candidates: result.candidates,
     updatedAt: new Date().toISOString()
   };
+
+  if (memoryCandidateCache.size >= CACHE_LIMIT) {
+    const oldestKey = memoryCandidateCache.keys().next().value;
+    memoryCandidateCache.delete(oldestKey);
+  }
+  memoryCandidateCache.set(requestKey, result.candidates);
 
   const index = records.findIndex((record) => candidateKey(record) === key);
 
