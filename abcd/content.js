@@ -27,6 +27,10 @@
   const STORAGE_KEY = "kkutuCrosswordRecords";
   const SCAN_INTERVAL = 400;
   const QUESTION_INPUT_SELECTOR = "#cw-q-input";
+  const QUESTION_STORAGE_KEY = "kkutuCrosswordQuestions";
+  const BRIDGE_MEANS_EVENT = "__KKUTU_CW_MEANS__";
+  const BRIDGE_TURN_END_EVENT = "__KKUTU_CW_TURN_END__";
+  const BRIDGE_SCRIPT = "page-bridge.js";
 
   if (window[GLOBAL]?.cleanup) {
     window[GLOBAL].cleanup();
@@ -37,6 +41,9 @@
     selectedRound: null,
     observedRound: null,
     pendingSubmission: null,
+    questionMap: new Map(),
+    sessionId: null,
+    meansSignature: null,
     writeChain: Promise.resolve(),
     observer: null,
     intervalId: null,
@@ -57,6 +64,16 @@
     return cleanText(answer)
       .normalize("NFC")
       .replace(/\s+/g, "");
+  }
+
+  function makeSessionId() {
+    return `cw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  function textFromHtml(value) {
+    const holder = document.createElement("div");
+    holder.innerHTML = String(value ?? "");
+    return cleanText(holder.textContent || holder.innerHTML || "");
   }
 
   function isExtensionAlive() {
@@ -225,13 +242,31 @@
     }
   }
 
+  function recordKey(record) {
+    if (
+      record?.sessionId &&
+      record?.roundIndex &&
+      record?.posKey &&
+      record?.answer
+    ) {
+      return [
+        record.sessionId,
+        record.roundIndex,
+        record.posKey,
+        record.answer
+      ].join("|");
+    }
+
+    return [
+      record?.type || "",
+      record?.question || "",
+      record?.answer || ""
+    ].join("|");
+  }
+
   function hasStoredDuplicate(records, record) {
-    return records.some(
-      (item) =>
-        item?.type === record.type &&
-        item?.question === record.question &&
-        item?.answer === record.answer
-    );
+    const key = recordKey(record);
+    return records.some((item) => recordKey(item) === key);
   }
 
   function chromeGet(key) {
@@ -268,6 +303,245 @@
     });
   }
 
+  function enqueueQuestionWrites(recordsToSave) {
+    if (!Array.isArray(recordsToSave) || recordsToSave.length === 0) {
+      return Promise.resolve();
+    }
+
+    state.writeChain = state.writeChain
+      .then(async () => {
+        const loaded = await chromeGet(QUESTION_STORAGE_KEY);
+        const records = Array.isArray(loaded) ? loaded : [];
+        const existing = new Set(
+          records.map((item) =>
+            [
+              item?.sessionId || "",
+              item?.roundIndex ?? "",
+              item?.posKey || ""
+            ].join("|")
+          )
+        );
+
+        let changed = false;
+
+        for (const record of recordsToSave) {
+          const key = [
+            record?.sessionId || "",
+            record?.roundIndex ?? "",
+            record?.posKey || ""
+          ].join("|");
+
+          if (!record?.sessionId || !record?.posKey || existing.has(key)) {
+            continue;
+          }
+
+          records.push(record);
+          existing.add(key);
+          changed = true;
+        }
+
+        if (changed) {
+          await chromeSet(QUESTION_STORAGE_KEY, records);
+        }
+      })
+      .catch((error) => {
+        console.warn("[KKuTu 기록기] 문제 저장 실패:", error.message);
+      });
+
+    return state.writeChain;
+  }
+
+  function ingestQuestionBank(means) {
+    if (!Array.isArray(means)) return;
+
+    let signature;
+    try {
+      signature = JSON.stringify(means);
+    } catch (error) {
+      console.warn("[KKuTu 기록기] 문제 데이터 직렬화 실패:", error);
+      return;
+    }
+
+    if (!state.sessionId) {
+      state.sessionId = makeSessionId();
+    }
+
+    if (signature !== state.meansSignature) {
+      state.meansSignature = signature;
+      state.sessionId = makeSessionId();
+      state.questionMap.clear();
+    }
+
+    const questionRecords = [];
+
+    means.forEach((roundData, roundIndex) => {
+      if (!roundData || typeof roundData !== "object") return;
+
+      Object.entries(roundData).forEach(([posKey, item]) => {
+        if (!item || typeof item !== "object") return;
+
+        const question = textFromHtml(item.mean);
+        if (!question) return;
+
+        const x = Number(item.x);
+        const y = Number(item.y);
+        const dir = Number(item.dir);
+        const length = Number(item.len);
+
+        const normalizedPosKey = [
+          Number.isFinite(x) ? x : item.x,
+          Number.isFinite(y) ? y : item.y,
+          Number.isFinite(dir) ? dir : item.dir
+        ].join(",");
+
+        const entry = {
+          sessionId: state.sessionId,
+          roundIndex: roundIndex + 1,
+          roundIndex0: roundIndex,
+          posKey: normalizedPosKey,
+          x: Number.isFinite(x) ? x : item.x,
+          y: Number.isFinite(y) ? y : item.y,
+          dir: Number.isFinite(dir) ? dir : item.dir,
+          type: cleanText(item.type),
+          theme: cleanText(item.theme),
+          question,
+          length: Number.isFinite(length) ? length : null,
+          collectedAt: new Date().toISOString()
+        };
+
+        state.questionMap.set(
+          `${roundIndex}|${normalizedPosKey}`,
+          entry
+        );
+        questionRecords.push(entry);
+      });
+    });
+
+    enqueueQuestionWrites(questionRecords);
+    console.log(
+      "[KKuTu 기록기] 전체 문제 자동 수집:",
+      questionRecords.length,
+      "개"
+    );
+  }
+
+  function getPlayerInfo(playerId) {
+    const id = playerId == null ? "" : String(playerId);
+    const user = id
+      ? document.getElementById("game-user-" + id)
+      : null;
+    const nameElement = user?.querySelector(".game-user-name");
+
+    return {
+      playerId: id || null,
+      playerName: cleanText(nameElement?.textContent || "") || id || "알 수 없음"
+    };
+  }
+
+  function getSelfPlayerInfo() {
+    const nameElement = document.querySelector(".game-user-my-name");
+    const user = nameElement?.closest(".game-user");
+    const playerId = user?.id?.startsWith("game-user-")
+      ? user.id.slice("game-user-".length)
+      : null;
+
+    return {
+      playerId,
+      playerName: cleanText(nameElement?.textContent || "") || "나"
+    };
+  }
+
+  function saveTurnEnd(detail) {
+    if (!detail || typeof detail !== "object") return;
+
+    const playerId = detail.id ?? detail.target;
+    const data = detail.data || {};
+    const pos = Array.isArray(data.pos) ? data.pos : null;
+    const answer = normalizeAnswer(data.value);
+
+    if (!pos || pos.length < 4 || !answer) return;
+
+    const roundIndex0 = Number(pos[0]);
+    if (!Number.isInteger(roundIndex0)) return;
+
+    const posKey = [pos[1], pos[2], pos[3]].join(",");
+    const question = state.questionMap.get(
+      `${roundIndex0}|${posKey}`
+    );
+
+    const player = getPlayerInfo(playerId);
+    const self = getSelfPlayerInfo();
+    const isSelf =
+      Boolean(player.playerId) &&
+      Boolean(self.playerId) &&
+      player.playerId === self.playerId;
+
+    const record = {
+      sessionId: state.sessionId || makeSessionId(),
+      source: isSelf ? "self" : "other",
+      playerId: player.playerId,
+      playerName: player.playerName,
+      roundIndex: roundIndex0 + 1,
+      pos: pos.slice(0, 4),
+      posKey,
+      type: question?.type || null,
+      theme: question?.theme || null,
+      question: question?.question || null,
+      length: question?.length ?? answer.length,
+      answer,
+      score: Number.isFinite(Number(data.score)) ? Number(data.score) : null,
+      savedAt: new Date().toISOString()
+    };
+
+    console.log("[KKuTu 기록기] 정답 감지:", record);
+    enqueueWrite(record);
+  }
+
+  function onBridgeMeans(event) {
+    if (state.destroyed) return;
+
+    try {
+      const payload =
+        typeof event.detail === "string"
+          ? JSON.parse(event.detail)
+          : event.detail;
+      ingestQuestionBank(payload?.means);
+    } catch (error) {
+      console.warn("[KKuTu 기록기] 문제 데이터 수신 실패:", error);
+    }
+  }
+
+  function onBridgeTurnEnd(event) {
+    if (state.destroyed) return;
+
+    try {
+      const payload =
+        typeof event.detail === "string"
+          ? JSON.parse(event.detail)
+          : event.detail;
+      saveTurnEnd(payload);
+    } catch (error) {
+      console.warn("[KKuTu 기록기] 정답 데이터 수신 실패:", error);
+    }
+  }
+
+  function injectPageBridge() {
+    const script = document.createElement("script");
+    script.src = chrome.runtime.getURL(BRIDGE_SCRIPT);
+    script.async = false;
+
+    script.addEventListener("load", () => script.remove(), { once: true });
+    script.addEventListener("error", () => {
+      console.warn(
+        "[KKuTu 기록기] 페이지 브리지 로드 실패. " +
+        "기본 사용자 입력 기록 기능은 계속 동작합니다."
+      );
+      script.remove();
+    }, { once: true });
+
+    (document.head || document.documentElement).appendChild(script);
+  }
+
   function enqueueWrite(record) {
     state.writeChain = state.writeChain
       .then(async () => {
@@ -297,11 +571,23 @@
     const answer = normalizeAnswer(snapshot.answer);
     if (!answer || answer !== pending.answer) return;
 
+    const self = getSelfPlayerInfo();
+    const barParts = String(pending.barId || "").slice(3).split("-");
+    const posKey = barParts.length === 3 ? barParts.join(",") : null;
+
     const record = {
+      sessionId: state.sessionId || makeSessionId(),
+      source: "self",
+      playerId: self.playerId,
+      playerName: self.playerName,
+      roundIndex: pending.roundIndex + 1,
+      pos: barParts.length === 3 ? barParts : null,
+      posKey,
       type: pending.type,
       question: pending.question,
       answer,
       length: pending.length,
+      score: null,
       savedAt: new Date().toISOString()
     };
 
@@ -424,6 +710,8 @@
     document.removeEventListener("click", onRoundClick, true);
     document.removeEventListener("keydown", onKeyDown, true);
     document.removeEventListener("input", onInput, true);
+    window.removeEventListener(BRIDGE_MEANS_EVENT, onBridgeMeans);
+    window.removeEventListener(BRIDGE_TURN_END_EVENT, onBridgeTurnEnd);
 
     if (window[GLOBAL]) {
       delete window[GLOBAL];
@@ -443,6 +731,11 @@
   document.addEventListener("click", onRoundClick, true);
   document.addEventListener("keydown", onKeyDown, true);
   document.addEventListener("input", onInput, true);
+  window.addEventListener(BRIDGE_MEANS_EVENT, onBridgeMeans);
+  window.addEventListener(BRIDGE_TURN_END_EVENT, onBridgeTurnEnd);
+
+  injectPageBridge();
+
   state.intervalId = window.setInterval(scan, SCAN_INTERVAL);
 
   window[GLOBAL] = {
