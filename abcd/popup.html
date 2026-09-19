@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KKuTu 십자말풀이 기록기</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 420px;
+      min-height: 420px;
+      margin: 0;
+      padding: 16px;
+      font-family: Arial, sans-serif;
+      color: #222;
+      background: #f7f7f7;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 19px;
+    }
+
+    .summary {
+      margin-bottom: 12px;
+      padding: 10px;
+      border-radius: 8px;
+      background: white;
+      border: 1px solid #ddd;
+      font-size: 14px;
+    }
+
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    button {
+      padding: 8px 10px;
+      border: 1px solid #bbb;
+      border-radius: 6px;
+      background: white;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    button:hover {
+      background: #eee;
+    }
+
+    button.danger {
+      color: #b00020;
+      border-color: #d99;
+    }
+
+    #searchInput {
+      width: 100%;
+      padding: 9px;
+      margin-bottom: 10px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    #recordList {
+      max-height: 360px;
+      overflow-y: auto;
+    }
+
+    .record {
+      margin-bottom: 8px;
+      padding: 10px;
+      border-radius: 8px;
+      background: white;
+      border: 1px solid #ddd;
+    }
+
+    .record-type {
+      color: #666;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+
+    .record-question {
+      font-size: 13px;
+      line-height: 1.45;
+      margin-bottom: 6px;
+    }
+
+    .record-answer {
+      font-size: 15px;
+      font-weight: bold;
+      color: #1261a0;
+    }
+
+    .empty {
+      padding: 20px;
+      text-align: center;
+      color: #777;
+      background: white;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>KKuTu 십자말풀이 기록기</h1>
+
+  <div class="summary">
+    저장된 문제 수: <strong id="recordCount">0</strong>개
+  </div>
+
+  <div class="buttons">
+    <button id="exportJsonButton">JSON 내보내기</button>
+    <button id="exportCsvButton">CSV 내보내기</button>
+    <button id="refreshButton">새로고침</button>
+    <button id="clearButton" class="danger">전체 삭제</button>
+  </div>
+
+  <input
+    id="searchInput"
+    type="text"
+    placeholder="문제 또는 정답 검색"
+  />
+
+  <div id="recordList"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
