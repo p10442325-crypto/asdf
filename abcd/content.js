@@ -152,7 +152,7 @@
     }
 
     const rows = Array.isArray(candidates)
-      ? candidates.slice(0, 8)
+      ? candidates.slice(0, 3)
       : [];
 
     const candidateHtml = rows.length
