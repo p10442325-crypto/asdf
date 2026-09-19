@@ -42,8 +42,12 @@
     observedRound: null,
     pendingSubmission: null,
     questionMap: new Map(),
+    candidateMap: new Map(),
+    candidatePanel: null,
+    candidateTimer: null,
     sessionId: makeSessionId(),
     meansSignature: null,
+    apiKeyNoticeShown: false,
     writeChain: Promise.resolve(),
     observer: null,
     intervalId: null,
@@ -68,6 +72,107 @@
 
   function makeSessionId() {
     return `cw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  function showCandidatePanel(entry, candidates, needsApiKey = false) {
+    if (state.destroyed || !entry) return;
+
+    let panel = state.candidatePanel;
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.id = "__kkutuRecorderCandidates";
+      Object.assign(panel.style, {
+        position: "fixed",
+        left: "18px",
+        bottom: "18px",
+        zIndex: "2147483647",
+        width: "320px",
+        maxWidth: "calc(100vw - 36px)",
+        padding: "12px",
+        border: "1px solid rgba(0,0,0,.12)",
+        borderRadius: "10px",
+        background: "rgba(20,20,20,.94)",
+        color: "#fff",
+        fontSize: "12px",
+        lineHeight: "1.45",
+        boxShadow: "0 6px 18px rgba(0,0,0,.28)",
+        pointerEvents: "auto"
+      });
+      (document.body || document.documentElement).appendChild(panel);
+      state.candidatePanel = panel;
+    }
+
+    const rows = Array.isArray(candidates)
+      ? candidates.slice(0, 8)
+      : [];
+
+    const candidateHtml = rows.length
+      ? rows.map((candidate, index) => `
+          <div style="margin-top:6px;padding:6px 8px;border-radius:6px;background:rgba(255,255,255,.09);">
+            <strong style="font-size:14px;">${index + 1}. ${escapeForHtml(candidate.word)}</strong>
+            <div style="opacity:.75;margin-top:2px;">${escapeForHtml(candidate.definition || "")}</div>
+          </div>
+        `).join("")
+      : needsApiKey
+        ? "<div style=\"margin-top:6px;opacity:.8;\">표준국어대사전 API 키를 팝업에서 설정하세요.</div>"
+        : "<div style=\"margin-top:6px;opacity:.8;\">검색 결과가 없습니다.</div>";
+
+    panel.innerHTML = `
+      <div style="font-weight:700;font-size:13px;">사전 정답 후보</div>
+      <div style="margin-top:4px;opacity:.75;">${escapeForHtml(entry.question)}</div>
+      ${candidateHtml}
+    `;
+  }
+
+  function hideCandidatePanel() {
+    if (state.candidatePanel) {
+      state.candidatePanel.remove();
+      state.candidatePanel = null;
+    }
+  }
+
+  function escapeForHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function requestCandidates(entry) {
+    if (!entry || !isExtensionAlive()) return;
+
+    clearTimeout(state.candidateTimer);
+    state.candidateTimer = setTimeout(() => {
+      chrome.runtime.sendMessage({
+        type: "kkutuSearchCandidates",
+        sessionId: entry.sessionId,
+        roundIndex: entry.roundIndex,
+        posKey: entry.posKey,
+        question: entry.question,
+        length: entry.length
+      }, (result) => {
+        if (chrome.runtime.lastError) return;
+
+        if (!result?.ok && result?.needsApiKey) {
+          showCandidatePanel(entry, [], true);
+          return;
+        }
+
+        if (!result?.ok) {
+          console.warn("[KKuTu 기록기] 사전 검색 실패:", result?.error || "알 수 없음");
+          return;
+        }
+
+        state.candidateMap.set(
+          `${entry.roundIndex0}|${entry.posKey}`,
+          result.candidates || []
+        );
+
+        showCandidatePanel(entry, result.candidates || []);
+      });
+    }, 80);
   }
 
   function showSaveNotice(message) {
@@ -239,12 +344,27 @@
     state.selectedRound = round?.index ?? null;
     state.pendingSubmission = null;
     queueScan();
+
+    if (round) {
+      const snapshot = getSnapshot();
+      const entry = snapshot
+        ? state.questionMap.get(`${round.index}|${snapshot.barId.slice(3).replace(/-/g, ",")}`)
+        : null;
+
+      if (entry) {
+        requestCandidates(entry);
+      } else {
+        hideCandidatePanel();
+      }
+    }
   }
 
   function clearSelection() {
     state.selectedBarId = null;
     state.selectedRound = null;
     state.pendingSubmission = null;
+    clearTimeout(state.candidateTimer);
+    hideCandidatePanel();
   }
 
   function syncObservedRound(round) {
@@ -766,6 +886,9 @@
       clearTimeout(toast.__kkutuTimer);
       toast.remove();
     }
+
+    clearTimeout(state.candidateTimer);
+    hideCandidatePanel();
 
     if (window[GLOBAL]) {
       delete window[GLOBAL];
