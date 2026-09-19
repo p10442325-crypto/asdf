@@ -37,7 +37,7 @@ function extractQueries(question) {
   const whole = cleaned.length <= 80 ? [cleaned] : [];
   const tokens = cleaned
     .split(" ")
-    .map((v) => v.replace(/[^가-힣A-Za-z0-9]/g, ""))
+    .map((v) => v.replace(/[^가-힣]/g, ""))
     .filter((v) => v.length >= 2)
     .sort((a, b) => b.length - a.length);
 
