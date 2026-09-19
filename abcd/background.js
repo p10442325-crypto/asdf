@@ -14,6 +14,12 @@ function normalizeAnswer(value) {
     .replace(/\s+/g, "");
 }
 
+function koreanLength(value) {
+  return [...String(value ?? "")]
+    .filter((char) => /[가-힣]/.test(char))
+    .length;
+}
+
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
@@ -99,7 +105,8 @@ function scoreCandidate(candidate, question, length) {
 
   let score = 0;
 
-  if (Number.isInteger(length) && answer.length === length) score += 80;
+  const answerSyllables = koreanLength(answer);
+  if (Number.isInteger(length) && answerSyllables === length) score += 80;
 
   const tokens = clue
     .split(" ")
@@ -166,7 +173,7 @@ async function searchCandidates({ question, length }) {
     needsApiKey: false,
     candidates: [...map.values()]
       .sort((a, b) => b.score - a.score || a.word.length - b.word.length)
-      .slice(0, 10)
+      .slice(0, 3)
   };
 }
 
