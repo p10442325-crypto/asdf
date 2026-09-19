@@ -2,6 +2,7 @@
 
 const STORAGE_KEY = "kkutuCrosswordRecords";
 const QUESTION_STORAGE_KEY = "kkutuCrosswordQuestions";
+const API_KEY_STORAGE_KEY = "kkutuStdDictApiKey";
 
 let allRecords = [];
 
@@ -14,6 +15,10 @@ const exportJsonButton = document.getElementById("exportJsonButton");
 const exportCsvButton = document.getElementById("exportCsvButton");
 const refreshButton = document.getElementById("refreshButton");
 const clearButton = document.getElementById("clearButton");
+const apiKeyInput = document.getElementById("apiKeyInput");
+const saveApiKeyButton = document.getElementById("saveApiKeyButton");
+const clearApiKeyButton = document.getElementById("clearApiKeyButton");
+const apiStatus = document.getElementById("apiStatus");
 
 /*
  * 저장 데이터 읽기
@@ -29,6 +34,41 @@ function loadRecords() {
         : [];
 
       renderRecords();
+    }
+  );
+}
+
+function loadApiKey() {
+  chrome.storage.local.get(
+    { [API_KEY_STORAGE_KEY]: "" },
+    (result) => {
+      apiKeyInput.value = result[API_KEY_STORAGE_KEY] || "";
+      apiStatus.textContent = apiKeyInput.value
+        ? "API 키가 설정되어 있습니다."
+        : "API 키를 입력하면 문제별 정답 후보를 검색합니다.";
+    }
+  );
+}
+
+function saveApiKey() {
+  const key = apiKeyInput.value.trim();
+
+  chrome.storage.local.set(
+    { [API_KEY_STORAGE_KEY]: key },
+    () => {
+      apiStatus.textContent = key
+        ? "API 키를 저장했습니다."
+        : "API 키가 비어 있습니다.";
+    }
+  );
+}
+
+function clearApiKey() {
+  chrome.storage.local.set(
+    { [API_KEY_STORAGE_KEY]: "" },
+    () => {
+      apiKeyInput.value = "";
+      apiStatus.textContent = "API 키를 삭제했습니다.";
     }
   );
 }
@@ -248,6 +288,16 @@ exportCsvButton.addEventListener(
 refreshButton.addEventListener(
   "click",
   loadRecords
+);
+
+saveApiKeyButton.addEventListener(
+  "click",
+  saveApiKey
+);
+
+clearApiKeyButton.addEventListener(
+  "click",
+  clearApiKey
 );
 
 clearButton.addEventListener(
