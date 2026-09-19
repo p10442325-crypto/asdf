@@ -124,7 +124,41 @@ function scoreCandidate(candidate, question, length) {
   return score;
 }
 
+function requestCacheKey(question, length) {
+  return [
+    cleanText(question).normalize("NFC").toLowerCase(),
+    Number.isInteger(length) ? length : ""
+  ].join("|");
+}
+
+async function loadCachedCandidates(question, length) {
+  const loaded = await chrome.storage.local.get({
+    [CANDIDATE_STORAGE_KEY]: []
+  });
+
+  const records = Array.isArray(loaded[CANDIDATE_STORAGE_KEY])
+    ? loaded[CANDIDATE_STORAGE_KEY]
+    : [];
+
+  const key = requestCacheKey(question, length);
+  const hit = records.find(
+    (record) => record?.requestKey === key
+  );
+
+  return hit?.candidates || null;
+}
+
 async function searchCandidates({ question, length }) {
+  const cached = await loadCachedCandidates(question, length);
+  if (Array.isArray(cached)) {
+    return {
+      ok: true,
+      needsApiKey: false,
+      candidates: cached.slice(0, 3),
+      cached: true
+    };
+  }
+
   const stored = await chrome.storage.local.get({
     [API_KEY_STORAGE_KEY]: ""
   });
@@ -139,42 +173,50 @@ async function searchCandidates({ question, length }) {
   }
 
   const queries = extractQueries(question);
-  const all = [];
-
-  for (const query of queries) {
-    try {
-      const items = await apiSearch(apiKey, query, length);
-      all.push(...items);
-      if (all.length >= 100) break;
-    } catch (error) {
-      // If the whole clue query is too restrictive, token fallbacks still
-      // have a chance to return candidates.
-      if (query === queries[queries.length - 1]) throw error;
-    }
-  }
-
   const map = new Map();
 
-  for (const candidate of all) {
-    const key = normalizeAnswer(candidate.word);
-    const score = scoreCandidate(candidate, question, length);
-    if (!key || !Number.isFinite(score)) continue;
+  function mergeCandidates(items) {
+    for (const candidate of items) {
+      const key = normalizeAnswer(candidate.word);
+      const score = scoreCandidate(candidate, question, length);
+      if (!key || !Number.isFinite(score)) continue;
 
-    const previous = map.get(key);
-    if (!previous || score > previous.score) {
-      map.set(key, {
-        ...candidate,
-        score
-      });
+      const previous = map.get(key);
+      if (!previous || score > previous.score) {
+        map.set(key, {
+          ...candidate,
+          score
+        });
+      }
     }
   }
+
+  // Fast path: one request using the full clue.
+  if (queries.length > 0) {
+    const items = await apiSearch(apiKey, queries[0], length);
+    mergeCandidates(items);
+  }
+
+  // Only use fallback queries when the first request did not produce enough
+  // candidates. This is what keeps normal lookups close to one API request.
+  for (let i = 1; i < queries.length && map.size < 3; i++) {
+    try {
+      const items = await apiSearch(apiKey, queries[i], length);
+      mergeCandidates(items);
+    } catch (error) {
+      console.warn("[KKuTu 기록기] 보조 사전 검색 실패:", error.message);
+    }
+  }
+
+  const candidates = [...map.values()]
+    .sort((a, b) => b.score - a.score || a.word.length - b.word.length)
+    .slice(0, 3);
 
   return {
     ok: true,
     needsApiKey: false,
-    candidates: [...map.values()]
-      .sort((a, b) => b.score - a.score || a.word.length - b.word.length)
-      .slice(0, 3)
+    candidates,
+    cached: false
   };
 }
 
@@ -197,6 +239,7 @@ async function saveCandidates(request, result) {
   const key = candidateKey(request);
   const item = {
     ...request,
+    requestKey: requestCacheKey(request.question, request.length),
     candidates: result.candidates,
     updatedAt: new Date().toISOString()
   };
