@@ -204,6 +204,7 @@
         roundIndex: entry.roundIndex,
         posKey: entry.posKey,
         question: entry.question,
+        rawMean: entry.rawMean || "",
         length: entry.length
       }, (result) => {
         if (chrome.runtime.lastError) {
@@ -436,6 +437,7 @@
         type: snapshot.type,
         theme: null,
         question: cleanSearchText(snapshot.question),
+        rawMean: "",
         length: snapshot.length,
         collectedAt: new Date().toISOString()
       };
@@ -655,6 +657,7 @@
           type: cleanText(item.type),
           theme: cleanText(item.theme),
           question,
+          rawMean: String(item.mean ?? ""),
           length: Number.isFinite(length) ? length : null,
           collectedAt: new Date().toISOString()
         };
