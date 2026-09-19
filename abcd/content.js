@@ -70,6 +70,46 @@
     return `cw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   }
 
+  function showSaveNotice(message) {
+    if (state.destroyed) return;
+
+    let toast = document.getElementById("__kkutuRecorderToast");
+    if (!toast) {
+      toast = document.createElement("div");
+      toast.id = "__kkutuRecorderToast";
+      Object.assign(toast.style, {
+        position: "fixed",
+        top: "18px",
+        right: "18px",
+        zIndex: "2147483647",
+        padding: "10px 14px",
+        border: "1px solid rgba(0,0,0,.12)",
+        borderRadius: "8px",
+        background: "rgba(20,20,20,.92)",
+        color: "#fff",
+        fontSize: "13px",
+        lineHeight: "1.4",
+        boxShadow: "0 4px 14px rgba(0,0,0,.25)",
+        pointerEvents: "none",
+        opacity: "0",
+        transform: "translateY(-6px)",
+        transition: "opacity .15s ease, transform .15s ease",
+        whiteSpace: "pre-line"
+      });
+      (document.body || document.documentElement).appendChild(toast);
+    }
+
+    toast.textContent = message;
+    toast.style.opacity = "1";
+    toast.style.transform = "translateY(0)";
+
+    clearTimeout(toast.__kkutuTimer);
+    toast.__kkutuTimer = setTimeout(() => {
+      toast.style.opacity = "0";
+      toast.style.transform = "translateY(-6px)";
+    }, 1600);
+  }
+
   function textFromHtml(value) {
     const holder = document.createElement("div");
     holder.innerHTML = String(value ?? "");
@@ -342,6 +382,7 @@
 
         if (changed) {
           await chromeSet(QUESTION_STORAGE_KEY, records);
+          showSaveNotice(`문제 ${recordsToSave.length}개 저장됨`);
         }
       })
       .catch((error) => {
@@ -554,6 +595,11 @@
 
         records.push(record);
         await chromeSet(STORAGE_KEY, records);
+        showSaveNotice(
+          record.source === "other"
+            ? `정답 저장됨 · ${record.playerName || "다른 플레이어"}: ${record.answer}`
+            : `정답 저장됨: ${record.answer}`
+        );
       })
       .catch((error) => {
         console.warn("[KKuTu 기록기] 저장 실패:", error.message);
@@ -714,6 +760,12 @@
     document.removeEventListener("input", onInput, true);
     window.removeEventListener(BRIDGE_MEANS_EVENT, onBridgeMeans);
     window.removeEventListener(BRIDGE_TURN_END_EVENT, onBridgeTurnEnd);
+
+    const toast = document.getElementById("__kkutuRecorderToast");
+    if (toast) {
+      clearTimeout(toast.__kkutuTimer);
+      toast.remove();
+    }
 
     if (window[GLOBAL]) {
       delete window[GLOBAL];
