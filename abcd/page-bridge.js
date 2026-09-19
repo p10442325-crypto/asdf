@@ -48,7 +48,8 @@
 
         try {
           emit(MEANS_EVENT, {
-            means: data?.means || null
+            means: data?.means || null,
+            boards: data?.boards || null
           });
         } catch (error) {
           console.warn("[KKuTu 기록기 브리지] 문제 전송 실패:", error);
@@ -67,7 +68,10 @@
       try {
         const existingMeans = window.$data?._means;
         if (existingMeans) {
-          emit(MEANS_EVENT, { means: existingMeans });
+          emit(MEANS_EVENT, {
+            means: existingMeans,
+            boards: window.$data?._boards || null
+          });
         }
       } catch (error) {
         console.warn("[KKuTu 기록기 브리지] 현재 문제 전송 실패:", error);
