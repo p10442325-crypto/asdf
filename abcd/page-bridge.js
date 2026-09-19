@@ -12,6 +12,8 @@
 
   let stopped = false;
   let timer = null;
+  let originalStart = null;
+  let originalEnd = null;
   let wrappedStart = null;
   let wrappedEnd = null;
 
@@ -117,11 +119,11 @@
 
       try {
         const crossword = window.$lib?.Crossword;
-        if (crossword?.turnStart === wrappedStart) {
-          delete crossword.turnStart;
+        if (crossword?.turnStart === wrappedStart && originalStart) {
+          crossword.turnStart = originalStart;
         }
-        if (crossword?.turnEnd === wrappedEnd) {
-          delete crossword.turnEnd;
+        if (crossword?.turnEnd === wrappedEnd && originalEnd) {
+          crossword.turnEnd = originalEnd;
         }
       } catch (_) {
         // The page may already be tearing down.
