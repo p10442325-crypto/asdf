@@ -195,35 +195,40 @@
       toast.id = "__kkutuRecorderToast";
       Object.assign(toast.style, {
         position: "fixed",
-        top: "18px",
-        right: "18px",
+        top: "28px",
+        left: "50%",
+        transform: "translate(-50%, -14px) scale(.96)",
         zIndex: "2147483647",
-        padding: "10px 14px",
-        border: "1px solid rgba(0,0,0,.12)",
-        borderRadius: "8px",
-        background: "rgba(20,20,20,.92)",
+        minWidth: "300px",
+        maxWidth: "min(720px, calc(100vw - 32px))",
+        padding: "18px 24px",
+        border: "2px solid rgba(255,255,255,.18)",
+        borderRadius: "14px",
+        background: "rgba(16,16,20,.96)",
         color: "#fff",
-        fontSize: "13px",
-        lineHeight: "1.4",
-        boxShadow: "0 4px 14px rgba(0,0,0,.25)",
+        fontSize: "18px",
+        fontWeight: "700",
+        lineHeight: "1.5",
+        textAlign: "center",
+        boxShadow: "0 10px 30px rgba(0,0,0,.38)",
         pointerEvents: "none",
         opacity: "0",
-        transform: "translateY(-6px)",
-        transition: "opacity .15s ease, transform .15s ease",
-        whiteSpace: "pre-line"
+        transition: "opacity .18s ease, transform .18s ease",
+        whiteSpace: "pre-line",
+        backdropFilter: "blur(8px)"
       });
       (document.body || document.documentElement).appendChild(toast);
     }
 
     toast.textContent = message;
     toast.style.opacity = "1";
-    toast.style.transform = "translateY(0)";
+    toast.style.transform = "translate(-50%, 0) scale(1)";
 
     clearTimeout(toast.__kkutuTimer);
     toast.__kkutuTimer = setTimeout(() => {
       toast.style.opacity = "0";
-      toast.style.transform = "translateY(-6px)";
-    }, 1600);
+      toast.style.transform = "translate(-50%, -14px) scale(.96)";
+    }, 2400);
   }
 
   function textFromHtml(value) {
