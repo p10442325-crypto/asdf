@@ -24,46 +24,95 @@ function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function stripKoreanParticles(word) {
+  let value = String(word ?? "");
+
+  // Loose stemming for clue-search purposes. We are not trying to perform
+  // full Korean morphological analysis here; the goal is to turn forms such
+  // as "해수욕장이나", "모래찜질을", "사무를" into useful dictionary query
+  // words such as "해수욕장", "모래찜질", "사무".
+  const endings = [
+    "으로부터", "으로서", "으로써", "에서부터",
+    "이라면", "라면", "으로", "에게서", "한테서",
+    "에서도", "으로도", "이나", "나", "에서",
+    "에게", "한테", "까지", "부터", "처럼",
+    "보다", "으로", "로", "은", "는", "이", "가",
+    "을", "를", "의", "에", "도", "만", "와", "과"
+  ];
+
+  for (const ending of endings) {
+    if (value.endsWith(ending) && value.length - ending.length >= 2) {
+      value = value.slice(0, -ending.length);
+      break;
+    }
+  }
+
+  const verbEndings = [
+    "하는", "하며", "하고", "하여", "해진", "해지는",
+    "맡아보는", "맡아본", "맡아보며", "시키는", "시키며",
+    "되는", "되어", "되며", "있는", "있으며"
+  ];
+
+  for (const ending of verbEndings) {
+    if (value.endsWith(ending) && value.length - ending.length >= 2) {
+      value = value.slice(0, -ending.length);
+      break;
+    }
+  }
+
+  return value;
+}
+
 function extractQueries(question) {
   const cleaned = cleanText(question)
     .replace(/★+/g, " ")
     .replace(/[0-9０-９]+/g, " ")
     .replace(/[“”"'‘’()[\]{}<>]/g, " ")
-    .replace(/[.,!?;:/·=~]/g, " ")
-    .replace(/[-‐‑‒–—]/g, " ")
+    .replace(/[.,!?;:/·=~\-‐‑‒–—]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
   if (!cleaned) return [];
 
-  const runs = cleaned
-    .match(/[가-힣]+/g)
-    ?.filter((v) => v.length >= 2) || [];
+  const rawWords = cleaned.match(/[가-힣]+/g) || [];
+  const words = rawWords
+    .map(stripKoreanParticles)
+    .filter((word) => word.length >= 2);
 
-  const phrases = [];
+  const stopWords = new Set([
+    "사람", "것", "수", "곳", "때", "따위", "등",
+    "경우", "대한", "관한", "위한", "통한", "있는",
+    "없는", "하는", "되는", "그런", "어떤", "모든",
+    "여러", "에서", "에게", "이나", "및"
+  ]);
 
-  // Keep word boundaries. For example:
-  // "관공서·회사·군대 등에서" -> "관공서 회사 군대 등에서"
-  // instead of the broken "관공서회사군대".
-  for (let size = 5; size >= 2; size--) {
-    for (let i = 0; i + size <= runs.length; i++) {
-      const phrase = runs.slice(i, i + size).join(" ");
-      if (phrase.length >= 6) {
-        phrases.push(phrase);
-      }
-      if (phrases.length >= 8) break;
+  const scored = new Map();
+
+  for (const word of words) {
+    if (stopWords.has(word)) continue;
+
+    let score = word.length * 10;
+    if (word.length >= 4) score += 20;
+
+    if (/^(해수욕장|모래사장|모래찜질|관공서|군대|회사|직원|사원|군인|임면|전보|사무)/.test(word)) {
+      score += 40;
     }
-    if (phrases.length >= 8) break;
+
+    scored.set(word, Math.max(scored.get(word) || 0, score));
   }
 
-  // The full normalized clue is useful because an exact dictionary
-  // definition can be found in one request.
+  const tokens = [...scored.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([word]) => word);
+
   const whole = cleaned.length <= 120 ? [cleaned] : [];
 
+  // Individual distinctive Korean words are much more reliable for the
+  // dictionary's include search than long phrases containing particles.
   return unique([
-    ...whole,
-    ...phrases.sort((a, b) => b.length - a.length)
-  ]).slice(0, 8);
+    ...tokens.slice(0, 6),
+    ...whole
+  ]).slice(0, 7);
 }
 
 async function apiSearch(apiKey, query, length) {
@@ -384,17 +433,30 @@ async function searchCandidates({ question, length, rawMean }) {
     }
   }
 
-  // Two fast searches in parallel:
-  // 1) the full normalized clue, where an exact definition can match;
-  // 2) a meaningful multi-word phrase, where the API's include search is
-  // less likely to be overwhelmed by punctuation or clue length.
-  const firstQueries = queries.slice(0, 2);
+  if (queries.length === 0) {
+    return {
+      ok: true,
+      needsApiKey: false,
+      candidates: []
+    };
+  }
 
-  const firstResults = await Promise.all(
-    firstQueries.map(async (query) => apiSearch(apiKey, query, length))
+  // Fast path: search up to three distinctive clue words in parallel.
+  // This keeps latency close to one network round-trip while avoiding the
+  // brittle "search the entire sentence as one phrase" behavior.
+  const firstQueries = queries
+    .filter((query) => query !== cleanText(question))
+    .slice(0, 3);
+
+  const initialQueries = firstQueries.length
+    ? firstQueries
+    : queries.slice(0, 1);
+
+  const initialResults = await Promise.all(
+    initialQueries.map((query) => apiSearch(apiKey, query, length))
   );
 
-  firstResults.forEach(mergeCandidates);
+  initialResults.forEach(mergeCandidates);
 
   function getBestScore() {
     let best = -Infinity;
@@ -404,15 +466,24 @@ async function searchCandidates({ question, length, rawMean }) {
     return best;
   }
 
-  // Do not stop merely because three weak candidates happened to arrive.
-  // Only skip further requests when the first pass already contains a
-  // strong definition-level match.
-  if (getBestScore() < 1000 && queries.length > 2) {
-    try {
-      const extraItems = await apiSearch(apiKey, queries[2], length);
-      mergeCandidates(extraItems);
-    } catch (error) {
-      console.warn("[KKuTu 기록기] 보조 사전 검색 실패:", error.message);
+  // A strong definition-level match ends the lookup. Otherwise, try up to
+  // three additional search terms, but never wait for them in the normal case.
+  if (getBestScore() < 1600) {
+    const used = new Set(initialQueries);
+
+    const extraQueries = queries.filter(
+      (query) => !used.has(query)
+    ).slice(0, 3);
+
+    for (const query of extraQueries) {
+      try {
+        const items = await apiSearch(apiKey, query, length);
+        mergeCandidates(items);
+
+        if (getBestScore() >= 1600) break;
+      } catch (error) {
+        console.warn("[KKuTu 기록기] 보조 사전 검색 실패:", error.message);
+      }
     }
   }
 
