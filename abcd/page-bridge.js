@@ -60,6 +60,7 @@
       wrappedTurnStart.__KKUTU_RECORDER_WRAPPED__ = true;
       crossword.turnStart = wrappedTurnStart;
       wrappedStart = wrappedTurnStart;
+      originalStart = original;
 
       // If the recorder was installed after the current round started,
       // forward the already-present crossword data immediately.
@@ -104,6 +105,7 @@
       wrappedTurnEnd.__KKUTU_RECORDER_WRAPPED__ = true;
       crossword.turnEnd = wrappedTurnEnd;
       wrappedEnd = wrappedTurnEnd;
+      originalEnd = original;
     }
   }
 
