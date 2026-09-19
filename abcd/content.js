@@ -345,18 +345,27 @@
     state.pendingSubmission = null;
     queueScan();
 
-    if (round) {
+    clearTimeout(state.candidateTimer);
+    state.candidateTimer = setTimeout(() => {
+      const currentRound = readCurrentRound();
       const snapshot = getSnapshot();
-      const entry = snapshot
-        ? state.questionMap.get(`${round.index}|${snapshot.barId.slice(3).replace(/-/g, ",")}`)
-        : null;
+
+      if (!currentRound || currentRound.index !== state.selectedRound || !snapshot) {
+        hideCandidatePanel();
+        return;
+      }
+
+      const posKey = snapshot.barId.slice(3).replace(/-/g, ",");
+      const entry = state.questionMap.get(
+        `${currentRound.index}|${posKey}`
+      );
 
       if (entry) {
         requestCandidates(entry);
       } else {
         hideCandidatePanel();
       }
-    }
+    }, 0);
   }
 
   function clearSelection() {
