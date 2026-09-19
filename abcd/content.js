@@ -74,7 +74,7 @@
     return `cw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  function showCandidatePanel(entry, candidates, needsApiKey = false) {
+  function showCandidatePanel(entry, candidates, needsApiKey = false, errorMessage = "") {
     if (state.destroyed || !entry) return;
 
     let panel = state.candidatePanel;
@@ -113,9 +113,11 @@
             <div style="opacity:.75;margin-top:2px;">${escapeForHtml(candidate.definition || "")}</div>
           </div>
         `).join("")
-      : needsApiKey
-        ? "<div style=\"margin-top:6px;opacity:.8;\">표준국어대사전 API 키를 팝업에서 설정하세요.</div>"
-        : "<div style=\"margin-top:6px;opacity:.8;\">검색 결과가 없습니다.</div>";
+      : errorMessage
+        ? `<div style="margin-top:6px;color:#ff9f9f;">검색 오류: ${escapeForHtml(errorMessage)}</div>`
+        : needsApiKey
+          ? "<div style=\"margin-top:6px;opacity:.8;\">표준국어대사전 API 키를 팝업에서 설정하세요.</div>"
+          : "<div style=\"margin-top:6px;opacity:.8;\">검색 결과가 없습니다.</div>";
 
     panel.innerHTML = `
       <div style="font-weight:700;font-size:13px;">사전 정답 후보</div>
@@ -144,6 +146,8 @@
     if (!entry || !isExtensionAlive()) return;
 
     clearTimeout(state.candidateTimer);
+    showCandidatePanel(entry, [], false);
+
     state.candidateTimer = setTimeout(() => {
       chrome.runtime.sendMessage({
         type: "kkutuSearchCandidates",
@@ -153,7 +157,12 @@
         question: entry.question,
         length: entry.length
       }, (result) => {
-        if (chrome.runtime.lastError) return;
+        if (chrome.runtime.lastError) {
+          const message = chrome.runtime.lastError.message || "확장 프로그램 메시지 오류";
+          console.warn("[KKuTu 기록기] 사전 검색 실패:", message);
+          showCandidatePanel(entry, [], false, message);
+          return;
+        }
 
         if (!result?.ok && result?.needsApiKey) {
           showCandidatePanel(entry, [], true);
@@ -161,7 +170,9 @@
         }
 
         if (!result?.ok) {
-          console.warn("[KKuTu 기록기] 사전 검색 실패:", result?.error || "알 수 없음");
+          const message = result?.error || "알 수 없는 오류";
+          console.warn("[KKuTu 기록기] 사전 검색 실패:", message);
+          showCandidatePanel(entry, [], false, message);
           return;
         }
 
@@ -356,14 +367,29 @@
       }
 
       const posKey = snapshot.barId.slice(3).replace(/-/g, ",");
-      const entry = state.questionMap.get(
+      const storedEntry = state.questionMap.get(
         `${currentRound.index}|${posKey}`
       );
 
-      if (entry) {
+      const entry = storedEntry || {
+        sessionId: state.sessionId || makeSessionId(),
+        roundIndex: currentRound.index + 1,
+        roundIndex0: currentRound.index,
+        posKey,
+        x: Number(snapshot.barId.split("-")[1]),
+        y: Number(snapshot.barId.split("-")[2]),
+        dir: Number(snapshot.barId.split("-")[3]),
+        type: snapshot.type,
+        theme: null,
+        question: snapshot.question,
+        length: snapshot.length,
+        collectedAt: new Date().toISOString()
+      };
+
+      if (entry.question) {
         requestCandidates(entry);
       } else {
-        hideCandidatePanel();
+        showCandidatePanel(entry, [], false, "문제 내용을 읽지 못했습니다.");
       }
     }, 0);
   }
