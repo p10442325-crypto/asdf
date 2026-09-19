@@ -2,35 +2,41 @@
   "use strict";
 
   /**
-   * KKuTu Crossword Recorder - rewritten from scratch
+   * KKuTu Crossword Recorder
    *
-   * 핵심 동작만 유지:
-   * 1) 현재 문제(type/question)와 현재 선택된 단어(cw-bar)를 찾는다.
-   * 2) 단어의 실제 칸 구성(cellKey)과 글자를 읽는다.
-   * 3) "사용자 입력/변화가 발생한 뒤 → 모든 칸이 채워짐" 전이만 정답으로 확정한다.
-   * 4) chrome.storage.local에 중복 없이 저장한다.
+   * KKuTu's official open-source client uses:
+   * - .cw-bar / .cw-cell for the board
+   * - #cw-q-input for clue input
+   * - .cw-q-head / .cw-q-body for the current clue
+   * - .rounds-current for the currently displayed crossword round
    *
-   * 의도적으로 제거한 것:
-   * - 보드 전체 signature 기반 라운드 판정
-   * - pending 저장 단계
-   * - bar id를 세션 식별자로 사용하는 로직
-   * - 과도한 디버그 API
+   * Important implementation detail:
+   * .cw-my-open means "this word was solved by me". It is NOT the
+   * currently selected bar. Therefore the recorder tracks selection from
+   * the user's actual bar click and verifies the resulting board update.
    *
-   * 중요:
-   * 완성 상태로 처음 발견된 단어는 저장하지 않는다.
-   * 게임이 이전 정답을 잠깐 화면에 남겨 두는 경우를 안전하게 무시하기 위한 것이다.
+   * The KKuTu client sends the answer on Enter and only paints letters into
+   * .cw-cell after the server accepts the answer. We use that transition:
+   *   user selects bar -> user submits answer -> same bar becomes complete
+   * and only commit when the completed board word exactly matches the
+   * submitted answer. This prevents another player's solve from being
+   * attributed to the user after an earlier wrong attempt.
    */
 
-  const GLOBAL = "__KKUTU_CROSSWORD_RECORDER_V2__";
+  const GLOBAL = "__KKUTU_CROSSWORD_RECORDER_V3__";
   const STORAGE_KEY = "kkutuCrosswordRecords";
   const SCAN_INTERVAL = 400;
+  const QUESTION_INPUT_SELECTOR = "#cw-q-input";
 
   if (window[GLOBAL]?.cleanup) {
     window[GLOBAL].cleanup();
   }
 
   const state = {
-    session: null,
+    selectedBarId: null,
+    selectedRound: null,
+    observedRound: null,
+    pendingSubmission: null,
     writeChain: Promise.resolve(),
     observer: null,
     intervalId: null,
@@ -45,6 +51,12 @@
       .replace(/\u00a0/g, " ")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  function normalizeAnswer(answer) {
+    return cleanText(answer)
+      .normalize("NFC")
+      .replace(/\s+/g, "");
   }
 
   function isExtensionAlive() {
@@ -63,8 +75,11 @@
     if (style.visibility === "hidden") return false;
     if (Number(style.opacity) === 0) return false;
 
-    // offsetParent가 null이어도 fixed/sticky 계열은 화면에 보일 수 있다.
-    if (element.offsetParent === null && style.position !== "fixed") {
+    // getClientRects() works for fixed/sticky/positioned elements where
+    // offsetParent can legitimately be null.
+    if (typeof element.getClientRects === "function") {
+      if (element.getClientRects().length === 0) return false;
+    } else if (element.offsetParent === null && style.position !== "fixed") {
       return false;
     }
 
@@ -88,11 +103,34 @@
     return { type, question };
   }
 
+  function readCurrentRound() {
+    const labels = [...document.querySelectorAll(".rounds label")];
+    const current = labels.find(isVisibleAndCurrentRound);
+    if (!current) return null;
+
+    return {
+      index: labels.indexOf(current),
+      text: cleanText(current.textContent)
+    };
+  }
+
+  function isVisibleAndCurrentRound(element) {
+    return isVisible(element) && element.classList.contains("rounds-current");
+  }
+
+  function getSelectedBar() {
+    if (!state.selectedBarId) return null;
+
+    const bar = document.getElementById(state.selectedBarId);
+    if (!bar || !isVisible(bar) || !bar.matches(".cw-bar")) return null;
+
+    return bar;
+  }
+
   function readCellLetter(cell) {
     const text = cleanText(cell?.textContent);
     if (!text) return "";
 
-    // 셀 번호/장식문자는 버리고 실제 글자만 합친다.
     const letters = [...text].filter((char) => LETTER_RE.test(char));
     return letters.join("");
   }
@@ -105,8 +143,6 @@
 
     const letters = cells.map(readCellLetter);
     const cellIds = cells.map((cell) => cell.id || "");
-
-    // bar id는 게임 내부에서 재사용될 수 있으므로 식별자로 쓰지 않는다.
     const cellKey = cellIds.join(",");
     const answer = letters.join("");
     const isComplete = letters.every((letter) => letter.length > 0);
@@ -121,94 +157,72 @@
     };
   }
 
-  function getActiveBar() {
-    return findVisible(".cw-bar.cw-my-open");
-  }
-
   function getSnapshot() {
     const question = readQuestion();
-    const bar = getActiveBar();
+    const round = readCurrentRound();
+    const bar = getSelectedBar();
     const word = readWord(bar);
 
-    if (!question || !word) return null;
+    if (!question || !round || !bar || !word) return null;
 
     return {
       ...question,
+      ...round,
       ...word,
-      key: `${question.type}|${question.question}|${word.cellKey}`
+      barId: bar.id,
+      key: `${round.index}|${question.type}|${question.question}|${word.cellKey}`
     };
   }
 
-  function resetSession(snapshot) {
-    state.session = {
-      key: snapshot.key,
-      type: snapshot.type,
-      question: snapshot.question,
-      cellKey: snapshot.cellKey,
-      bar: snapshot.bar,
-      length: snapshot.length,
+  function selectBar(bar) {
+    if (!bar?.isConnected || !bar.matches(".cw-bar")) return;
 
-      // 처음 상태를 기억해 두고, 실제 변화가 생겼는지 판단한다.
-      initialAnswer: snapshot.answer,
-      lastAnswer: snapshot.answer,
-
-      // true가 된 뒤 complete 상태가 되면 기록한다.
-      armed: !snapshot.isComplete,
-      committed: false
-    };
+    const round = readCurrentRound();
+    state.selectedBarId = bar.id || null;
+    state.selectedRound = round?.index ?? null;
+    state.pendingSubmission = null;
+    queueScan();
   }
 
-  function sessionStillPointsTo(snapshot) {
-    const session = state.session;
-    if (!session) return false;
-
-    if (session.key !== snapshot.key) return false;
-    if (!session.bar?.isConnected) return false;
-
-    const current = readWord(session.bar);
-    if (!current || current.cellKey !== session.cellKey) return false;
-
-    return true;
+  function clearSelection() {
+    state.selectedBarId = null;
+    state.selectedRound = null;
+    state.pendingSubmission = null;
   }
 
-  function syncSession(snapshot) {
-    if (!snapshot) return;
+  function syncObservedRound(round) {
+    if (!round) return;
 
-    if (!state.session || !sessionStillPointsTo(snapshot)) {
-      resetSession(snapshot);
-      return;
+    const marker = `${round.index}|${round.text}`;
+    if (state.observedRound !== null && state.observedRound !== marker) {
+      // Automatic round transitions do not generate a click event. Detect
+      // those transitions here so a pending submission from the previous
+      // round can never be applied to the next board.
+      //
+      // Keep a bar selected when it was just clicked in the new round. This
+      // avoids a microtask race where selection happens before the observer
+      // notices the round marker change.
+      if (state.selectedRound !== round.index) {
+        clearSelection();
+      }
     }
 
-    const session = state.session;
-
-    // 단어가 비워졌다면 새 입력 사이클이 시작된 것으로 본다.
-    if (!snapshot.isComplete) {
-      session.armed = true;
-      session.committed = false;
-    }
-
-    // 전체 문자열이 실제로 바뀌어도 사용자가 새 입력을 한 것으로 본다.
-    if (snapshot.answer !== session.lastAnswer) {
-      session.armed = true;
-      session.committed = false;
-    }
-
-    session.lastAnswer = snapshot.answer;
-    session.bar = snapshot.bar;
-    session.length = snapshot.length;
+    state.observedRound = marker;
   }
 
-  function markUserInput() {
-    const snapshot = getSnapshot();
-    if (!snapshot || !state.session) return;
-    if (state.session.key !== snapshot.key) return;
+  function syncPending(snapshot) {
+    const pending = state.pendingSubmission;
+    if (!pending) return;
 
-    state.session.armed = true;
-    state.session.committed = false;
-  }
-
-  function normalizeAnswer(answer) {
-    return cleanText(answer).replace(/\s+/g, "");
+    if (
+      pending.roundIndex !== snapshot.index ||
+      pending.barId !== snapshot.barId ||
+      pending.cellKey !== snapshot.cellKey ||
+      pending.type !== snapshot.type ||
+      pending.question !== snapshot.question
+    ) {
+      state.pendingSubmission = null;
+    }
   }
 
   function hasStoredDuplicate(records, record) {
@@ -273,28 +287,27 @@
   }
 
   function commit(snapshot) {
-    const session = state.session;
-    if (!session) return;
-    if (session.committed) return;
-    if (!session.armed) return;
+    const pending = state.pendingSubmission;
+    if (!pending) return;
     if (!snapshot.isComplete) return;
 
+    syncPending(snapshot);
+    if (!state.pendingSubmission) return;
+
     const answer = normalizeAnswer(snapshot.answer);
-    if (!answer) return;
-
-    // 현재 DOM이 세션의 물리적 칸과 동일한지 마지막으로 확인한다.
-    if (snapshot.cellKey !== session.cellKey) return;
-
-    session.committed = true;
-    session.armed = false;
+    if (!answer || answer !== pending.answer) return;
 
     const record = {
-      type: session.type,
-      question: session.question,
+      type: pending.type,
+      question: pending.question,
       answer,
-      length: session.length,
+      length: pending.length,
       savedAt: new Date().toISOString()
     };
+
+    // Clear before enqueueing so repeated MutationObserver/interval scans
+    // cannot queue the same logical solve twice.
+    state.pendingSubmission = null;
 
     console.log("[KKuTu 기록기] 정답 저장:", record);
     enqueueWrite(record);
@@ -304,13 +317,11 @@
     if (state.destroyed) return;
 
     try {
+      syncObservedRound(readCurrentRound());
       const snapshot = getSnapshot();
       if (!snapshot) return;
 
-      // 문제 + 물리적 칸 구성이 바뀌었을 때만 새 세션을 만든다.
-      syncSession(snapshot);
-
-      // 세션이 방금 생성되었거나 갱신된 뒤 완성 전이를 검사한다.
+      syncPending(snapshot);
       commit(snapshot);
     } catch (error) {
       console.error("[KKuTu 기록기] 검사 오류:", error);
@@ -327,22 +338,76 @@
     });
   }
 
+  function getQuestionInput(target) {
+    if (target?.matches?.(QUESTION_INPUT_SELECTOR)) return target;
+    if (target?.closest) return target.closest(QUESTION_INPUT_SELECTOR);
+    return null;
+  }
+
+  function onBarClick(event) {
+    if (state.destroyed) return;
+
+    const bar = event.target?.closest?.(".cw-bar");
+    if (!bar) return;
+
+    selectBar(bar);
+  }
+
+  function onRoundClick(event) {
+    if (state.destroyed) return;
+
+    const label = event.target?.closest?.(".rounds label");
+    if (!label) return;
+
+    // The client rebuilds the crossword display when a different round is
+    // selected. The previous bar id can then refer to a different board.
+    clearSelection();
+    queueScan();
+  }
+
   function onKeyDown(event) {
     if (state.destroyed) return;
 
+    const input = getQuestionInput(event.target);
+    if (!input) return;
+
     const key = String(event.key || "");
-    const isLetter = /[A-Za-z가-힣ㄱ-ㅎㅏ-ㅣ]/.test(key);
-    const isEditingKey = key === "Backspace" || key === "Delete";
+    const keyCode = Number(event.keyCode || event.which || 0);
+    const isEnter = key === "Enter" || keyCode === 13;
+    if (!isEnter) return;
 
-    if (!isLetter && !isEditingKey) return;
+    const bar = getSelectedBar();
+    const question = readQuestion();
+    const round = readCurrentRound();
 
-    // 첫 입력보다 먼저 세션을 잡아 두면, 아주 빠른 입력으로
-    // "처음부터 완성된 단어"만 관찰되는 경우도 놓치지 않는다.
-    if (!state.session) {
-      scan();
-    }
+    if (!bar || !question || !round) return;
 
-    markUserInput();
+    const word = readWord(bar);
+    if (!word || word.isComplete) return;
+
+    const answer = normalizeAnswer(input.value);
+    if (!answer) return;
+
+    state.pendingSubmission = {
+      roundIndex: round.index,
+      barId: bar.id,
+      cellKey: word.cellKey,
+      type: question.type,
+      question: question.question,
+      answer,
+      length: word.length,
+      submittedAt: Date.now()
+    };
+
+    queueScan();
+  }
+
+  function onInput(event) {
+    if (state.destroyed) return;
+    if (!getQuestionInput(event.target)) return;
+
+    // input/composition events are useful for scheduling a later scan, but
+    // submission itself is still keyed to Enter to match the KKuTu client.
     queueScan();
   }
 
@@ -355,7 +420,10 @@
       clearInterval(state.intervalId);
     }
 
+    document.removeEventListener("click", onBarClick, true);
+    document.removeEventListener("click", onRoundClick, true);
     document.removeEventListener("keydown", onKeyDown, true);
+    document.removeEventListener("input", onInput, true);
 
     if (window[GLOBAL]) {
       delete window[GLOBAL];
@@ -371,24 +439,30 @@
     attributeFilter: ["class", "style", "id"]
   });
 
+  document.addEventListener("click", onBarClick, true);
+  document.addEventListener("click", onRoundClick, true);
   document.addEventListener("keydown", onKeyDown, true);
+  document.addEventListener("input", onInput, true);
   state.intervalId = window.setInterval(scan, SCAN_INTERVAL);
 
   window[GLOBAL] = {
     cleanup,
     getState: () => ({
-      session: state.session
+      selectedBarId: state.selectedBarId,
+      selectedRound: state.selectedRound,
+      observedRound: state.observedRound,
+      pendingSubmission: state.pendingSubmission
         ? {
-            key: state.session.key,
-            question: state.session.question,
-            answer: state.session.lastAnswer,
-            armed: state.session.armed,
-            committed: state.session.committed
+            type: state.pendingSubmission.type,
+            question: state.pendingSubmission.question,
+            answer: state.pendingSubmission.answer,
+            barId: state.pendingSubmission.barId,
+            cellKey: state.pendingSubmission.cellKey
           }
         : null
     })
   };
 
-  console.log("[KKuTu 기록기] 새 기록기 시작");
+  console.log("[KKuTu 기록기] 수정 기록기 시작");
   scan();
 })();
