@@ -70,6 +70,55 @@
       .replace(/\s+/g, "");
   }
 
+  // KKuTu's crossword clue text contains internal dictionary sense markers
+  // such as ＂1＂, ［1］ and （1）. The official client turns those markers
+  // into visible numbering in processWord(), so reading textContent directly
+  // can produce strings like "11주해..." where the first "1" is a display
+  // marker. Parse the original KKuTu format instead of stripping arbitrary
+  // digits from the definition.
+  function normalizeCrosswordMean(value) {
+    const raw = String(value ?? "");
+    if (!raw) return "";
+
+    if (raw.indexOf("＂") === -1) {
+      return cleanText(raw);
+    }
+
+    const means = raw
+      .split(/＂[0-9]+＂/)
+      .slice(1)
+      .map((m1) => {
+        if (m1.indexOf("［") === -1) {
+          return [[m1]];
+        }
+
+        return m1
+          .split(/［[0-9]+］/)
+          .slice(1)
+          .map((m2) => m2.split(/（[0-9]+）/).slice(1));
+      });
+
+    const pieces = [];
+
+    for (const m1 of means) {
+      for (const m2 of m1) {
+        for (const m3 of m2) {
+          const text = cleanText(m3);
+          if (text) pieces.push(text);
+        }
+      }
+    }
+
+    return pieces.join(" ");
+  }
+
+  function cleanSearchText(value) {
+    return normalizeCrosswordMean(value)
+      .replace(/[0-9０-９]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
   function makeSessionId() {
     return `cw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   }
@@ -386,7 +435,7 @@
         dir: Number(snapshot.barId.split("-")[3]),
         type: snapshot.type,
         theme: null,
-        question: snapshot.question,
+        question: cleanSearchText(snapshot.question),
         length: snapshot.length,
         collectedAt: new Date().toISOString()
       };
@@ -581,7 +630,7 @@
       Object.entries(roundData).forEach(([posKey, item]) => {
         if (!item || typeof item !== "object") return;
 
-        const question = textFromHtml(item.mean);
+        const question = normalizeCrosswordMean(item.mean);
         if (!question) return;
 
         const x = Number(item.x);
