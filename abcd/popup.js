@@ -305,4 +305,5 @@ clearButton.addEventListener(
   clearRecords
 );
 
+loadApiKey();
 loadRecords();
