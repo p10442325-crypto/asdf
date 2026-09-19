@@ -30,22 +30,40 @@ function extractQueries(question) {
     .replace(/[0-9０-９]+/g, " ")
     .replace(/[“”"'‘’()[\]{}<>]/g, " ")
     .replace(/[.,!?;:/·=~]/g, " ")
+    .replace(/[-‐‑‒–—]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
   if (!cleaned) return [];
 
-  const tokens = cleaned
-    .split(" ")
-    .map((v) => v.replace(/[^가-힣]/g, ""))
-    .filter((v) => v.length >= 2)
-    .sort((a, b) => b.length - a.length);
+  const runs = cleaned
+    .match(/[가-힣]+/g)
+    ?.filter((v) => v.length >= 2) || [];
 
-  const whole = cleaned.length <= 80 ? [cleaned] : [];
+  const phrases = [];
 
-  // Prefer long distinctive words. The full clue often contains a ★ hole,
-  // so an include search for the whole clue is less useful as the first call.
-  return unique([...tokens.slice(0, 3), ...whole]).slice(0, 4);
+  // Keep word boundaries. For example:
+  // "관공서·회사·군대 등에서" -> "관공서 회사 군대 등에서"
+  // instead of the broken "관공서회사군대".
+  for (let size = 5; size >= 2; size--) {
+    for (let i = 0; i + size <= runs.length; i++) {
+      const phrase = runs.slice(i, i + size).join(" ");
+      if (phrase.length >= 6) {
+        phrases.push(phrase);
+      }
+      if (phrases.length >= 8) break;
+    }
+    if (phrases.length >= 8) break;
+  }
+
+  // The full normalized clue is useful because an exact dictionary
+  // definition can be found in one request.
+  const whole = cleaned.length <= 120 ? [cleaned] : [];
+
+  return unique([
+    ...whole,
+    ...phrases.sort((a, b) => b.length - a.length)
+  ]).slice(0, 8);
 }
 
 async function apiSearch(apiKey, query, length) {
@@ -366,24 +384,44 @@ async function searchCandidates({ question, length, rawMean }) {
     }
   }
 
-  // Use the longest informative clue token first. Full-clue include searches
-  // are often too strict because KKuTu has replaced the answer with ★.
-  const orderedQueries = queries.length > 0
-    ? queries
-    : [];
+  // Two fast searches in parallel:
+  // 1) the full normalized clue, where an exact definition can match;
+  // 2) a meaningful multi-word phrase, where the API's include search is
+  // less likely to be overwhelmed by punctuation or clue length.
+  const firstQueries = queries.slice(0, 2);
 
-  for (let i = 0; i < orderedQueries.length && map.size < 3; i++) {
+  const firstResults = await Promise.all(
+    firstQueries.map(async (query) => apiSearch(apiKey, query, length))
+  );
+
+  firstResults.forEach(mergeCandidates);
+
+  function getBestScore() {
+    let best = -Infinity;
+    for (const candidate of map.values()) {
+      if (candidate.score > best) best = candidate.score;
+    }
+    return best;
+  }
+
+  // Do not stop merely because three weak candidates happened to arrive.
+  // Only skip further requests when the first pass already contains a
+  // strong definition-level match.
+  if (getBestScore() < 1000 && queries.length > 2) {
     try {
-      const items = await apiSearch(apiKey, orderedQueries[i], length);
-      mergeCandidates(items);
+      const extraItems = await apiSearch(apiKey, queries[2], length);
+      mergeCandidates(extraItems);
     } catch (error) {
-      if (i === 0) throw error;
       console.warn("[KKuTu 기록기] 보조 사전 검색 실패:", error.message);
     }
   }
 
   const candidates = [...map.values()]
-    .sort((a, b) => b.score - a.score || koreanLength(a.word) - koreanLength(b.word))
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        koreanLength(a.word) - koreanLength(b.word)
+    )
     .slice(0, 3);
 
   return {
