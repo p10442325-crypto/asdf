@@ -1,10 +1,12 @@
 "use strict";
 
 const STORAGE_KEY = "kkutuCrosswordRecords";
+const QUESTION_STORAGE_KEY = "kkutuCrosswordQuestions";
 
 let allRecords = [];
 
 const recordCountElement = document.getElementById("recordCount");
+const questionCountElement = document.getElementById("questionCount");
 const recordListElement = document.getElementById("recordList");
 const searchInputElement = document.getElementById("searchInput");
 
