@@ -42,7 +42,7 @@
     observedRound: null,
     pendingSubmission: null,
     questionMap: new Map(),
-    sessionId: null,
+    sessionId: makeSessionId(),
     meansSignature: null,
     writeChain: Promise.resolve(),
     observer: null,
@@ -351,12 +351,12 @@
     return state.writeChain;
   }
 
-  function ingestQuestionBank(means) {
+  function ingestQuestionBank(means, boards) {
     if (!Array.isArray(means)) return;
 
     let signature;
     try {
-      signature = JSON.stringify(means);
+      signature = JSON.stringify({ means, boards });
     } catch (error) {
       console.warn("[KKuTu 기록기] 문제 데이터 직렬화 실패:", error);
       return;
@@ -454,6 +454,8 @@
   function saveTurnEnd(detail) {
     if (!detail || typeof detail !== "object") return;
 
+    if (!state.sessionId) state.sessionId = makeSessionId();
+
     const playerId = detail.id ?? detail.target;
     const data = detail.data || {};
     const pos = Array.isArray(data.pos) ? data.pos : null;
@@ -505,7 +507,7 @@
         typeof event.detail === "string"
           ? JSON.parse(event.detail)
           : event.detail;
-      ingestQuestionBank(payload?.means);
+      ingestQuestionBank(payload?.means, payload?.boards);
     } catch (error) {
       console.warn("[KKuTu 기록기] 문제 데이터 수신 실패:", error);
     }
