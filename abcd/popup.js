@@ -3,6 +3,7 @@
 const STORAGE_KEY = "kkutuCrosswordRecords";
 const QUESTION_STORAGE_KEY = "kkutuCrosswordQuestions";
 const API_KEY_STORAGE_KEY = "kkutuStdDictApiKey";
+const CANDIDATE_STORAGE_KEY = "kkutuCrosswordCandidates";
 
 let allRecords = [];
 
@@ -26,13 +27,19 @@ const apiStatus = document.getElementById("apiStatus");
 function loadRecords() {
   chrome.storage.local.get(
     {
-      [STORAGE_KEY]: []
+      [STORAGE_KEY]: [],
+      [QUESTION_STORAGE_KEY]: []
     },
     (result) => {
       allRecords = Array.isArray(result[STORAGE_KEY])
         ? result[STORAGE_KEY]
         : [];
 
+      const questions = Array.isArray(result[QUESTION_STORAGE_KEY])
+        ? result[QUESTION_STORAGE_KEY]
+        : [];
+
+      questionCountElement.textContent = questions.length;
       renderRecords();
     }
   );
@@ -138,6 +145,7 @@ function renderRecords() {
         <div class="record">
           <div class="record-type">
             ${escapeHtml(record.type || "")}
+            ${record.playerName ? " · " + escapeHtml(record.playerName) : ""}
           </div>
 
           <div class="record-question">
@@ -212,7 +220,9 @@ function exportCsv() {
     "유형",
     "문제",
     "정답",
-    "단어ID",
+    "플레이어",
+    "라운드",
+    "좌표",
     "글자수",
     "저장시간"
   ];
@@ -222,7 +232,9 @@ function exportCsv() {
       record.type,
       record.question,
       record.answer,
-      record.barId,
+      record.playerName,
+      record.roundIndex,
+      record.posKey,
       record.length,
       record.savedAt
     ];
@@ -261,10 +273,13 @@ function clearRecords() {
 
   chrome.storage.local.set(
     {
-      [STORAGE_KEY]: []
+      [STORAGE_KEY]: [],
+      [QUESTION_STORAGE_KEY]: [],
+      [CANDIDATE_STORAGE_KEY]: []
     },
     () => {
       allRecords = [];
+      questionCountElement.textContent = "0";
       renderRecords();
     }
   );
