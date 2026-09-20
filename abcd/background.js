@@ -568,12 +568,11 @@ async function searchCandidates({ question, length, rawMean }) {
 }
 
 function candidateKey(record) {
-
-  return [
-    record?.sessionId || "",
-    record?.roundIndex ?? "",
-    record?.posKey || ""
-  ].join("|");
+  return requestCacheKey(
+    record?.question || "",
+    Number.isInteger(record?.length) ? record.length : null,
+    record?.rawMean || ""
+  );
 }
 
 async function saveCandidates(request, result) {
@@ -584,7 +583,6 @@ async function saveCandidates(request, result) {
     ? loaded[CANDIDATE_STORAGE_KEY]
     : [];
 
-  const key = candidateKey(request);
   const requestKey = requestCacheKey(
     request.question,
     request.length,
@@ -604,7 +602,9 @@ async function saveCandidates(request, result) {
   }
   memoryCandidateCache.set(requestKey, result.candidates);
 
-  const index = records.findIndex((record) => candidateKey(record) === key);
+  const index = records.findIndex(
+    (record) => record?.requestKey === requestKey
+  );
 
   if (index >= 0) records[index] = item;
   else records.push(item);
