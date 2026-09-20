@@ -157,6 +157,21 @@
     return `cw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   }
 
+  function stableQuestionKey(record) {
+    return [
+      cleanSearchText(record?.question || ""),
+      Number.isInteger(record?.length) ? record.length : "",
+      cleanText(record?.type || ""),
+      String(record?.rawMean || "").normalize("NFC")
+    ].join("|");
+  }
+
+  function showStorageError(prefix, error) {
+    const message = error?.message || String(error || "알 수 없는 저장 오류");
+    console.warn("[KKuTu 기록기] " + prefix + ":", message);
+    showSaveNotice(prefix + ": " + message);
+  }
+
   function showCandidatePanel(entry, candidates, needsApiKey = false, errorMessage = "") {
     if (state.destroyed || !entry) return;
 
@@ -686,25 +701,17 @@
         const loaded = await chromeGet(QUESTION_STORAGE_KEY);
         const records = Array.isArray(loaded) ? loaded : [];
         const existing = new Set(
-          records.map((item) =>
-            [
-              item?.sessionId || "",
-              item?.roundIndex ?? "",
-              item?.posKey || ""
-            ].join("|")
-          )
+          records
+            .map((item) => stableQuestionKey(item))
+            .filter((key) => key !== "|||")
         );
 
         let changed = false;
 
         for (const record of recordsToSave) {
-          const key = [
-            record?.sessionId || "",
-            record?.roundIndex ?? "",
-            record?.posKey || ""
-          ].join("|");
+          const key = stableQuestionKey(record);
 
-          if (!record?.sessionId || !record?.posKey || existing.has(key)) {
+          if (key === "|||" || existing.has(key)) {
             continue;
           }
 
@@ -715,11 +722,11 @@
 
         if (changed) {
           await chromeSet(QUESTION_STORAGE_KEY, records);
-          showSaveNotice(`문제 ${recordsToSave.length}개 저장됨`);
+          showSaveNotice(`문제 자동 수집 완료 · 총 ${records.length}개`);
         }
       })
       .catch((error) => {
-        console.warn("[KKuTu 기록기] 문제 저장 실패:", error.message);
+        showStorageError("문제 저장 실패", error);
       });
 
     return state.writeChain;
@@ -936,7 +943,7 @@
         );
       })
       .catch((error) => {
-        console.warn("[KKuTu 기록기] 저장 실패:", error.message);
+        showStorageError("정답 저장 실패", error);
       });
 
     return state.writeChain;
