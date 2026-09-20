@@ -48,7 +48,8 @@
     sessionId: makeSessionId(),
     meansSignature: null,
     apiKeyNoticeShown: false,
-    writeChain: Promise.resolve(),
+    questionWriteChain: Promise.resolve(),
+    recordWriteChain: Promise.resolve(),
     observer: null,
     intervalId: null,
     scanQueued: false,
@@ -696,7 +697,7 @@
       return Promise.resolve();
     }
 
-    state.writeChain = state.writeChain
+    state.questionWriteChain = state.questionWriteChain
       .then(async () => {
         const loaded = await chromeGet(QUESTION_STORAGE_KEY);
         const records = Array.isArray(loaded) ? loaded : [];
@@ -729,7 +730,7 @@
         showStorageError("문제 저장 실패", error);
       });
 
-    return state.writeChain;
+    return state.questionWriteChain;
   }
 
   function ingestQuestionBank(means, boards) {
@@ -927,7 +928,7 @@
   }
 
   function enqueueWrite(record) {
-    state.writeChain = state.writeChain
+    state.recordWriteChain = state.recordWriteChain
       .then(async () => {
         const loaded = await chromeGet(STORAGE_KEY);
         const records = Array.isArray(loaded) ? loaded : [];
@@ -946,7 +947,7 @@
         showStorageError("정답 저장 실패", error);
       });
 
-    return state.writeChain;
+    return state.recordWriteChain;
   }
 
   function commit(snapshot) {
