@@ -146,9 +146,23 @@ async function apiSearch(apiKey, query, length) {
     params.set("letter_e", String(length));
   }
 
-  const response = await fetch(
-    "https://stdict.korean.go.kr/api/search.do?" + params.toString()
-  );
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+  let response;
+  try {
+    response = await fetch(
+      "https://stdict.korean.go.kr/api/search.do?" + params.toString(),
+      { signal: controller.signal }
+    );
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("표준국어대사전 API 응답 시간 초과");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     throw new Error("표준국어대사전 API HTTP " + response.status);

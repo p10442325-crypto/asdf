@@ -25,7 +25,7 @@
 
   const GLOBAL = "__KKUTU_CROSSWORD_RECORDER_V3__";
   const STORAGE_KEY = "kkutuCrosswordRecords";
-  const SCAN_INTERVAL = 400;
+  const SCAN_INTERVAL = 150;
   const QUESTION_INPUT_SELECTOR = "#cw-q-input";
   const QUESTION_STORAGE_KEY = "kkutuCrosswordQuestions";
   const BRIDGE_MEANS_EVENT = "__KKUTU_CW_MEANS__";
@@ -56,6 +56,40 @@
   };
 
   const LETTER_RE = /[가-힣ㄱ-ㅎㅏ-ㅣA-Za-z]/;
+
+  // Elements a mutation must touch (or be inside/contain) for it to be
+  // worth reacting to. Filtering irrelevant mutations here means scan()
+  // only runs for changes that can actually affect state, so the CPU time
+  // that used to go into wasted scans is instead available to react to
+  // real changes with less delay.
+  const RELEVANT_SELECTOR =
+    ".cw-bar, .cw-cell, .cw-q-head, .cw-q-body, #cw-q-input, " +
+    ".rounds, .rounds label, .game-user, .game-user-name, .game-user-my-name";
+
+  function nodeMatchesRelevant(node) {
+    if (!node) return false;
+    if (node.nodeType === 3) node = node.parentElement;
+    if (!node || node.nodeType !== 1) return false;
+    return Boolean(
+      node.matches?.(RELEVANT_SELECTOR) ||
+      node.closest?.(RELEVANT_SELECTOR) ||
+      node.querySelector?.(RELEVANT_SELECTOR)
+    );
+  }
+
+  function isRelevantMutationList(mutations) {
+    for (const mutation of mutations) {
+      if (nodeMatchesRelevant(mutation.target)) return true;
+
+      for (const node of mutation.addedNodes) {
+        if (nodeMatchesRelevant(node)) return true;
+      }
+      for (const node of mutation.removedNodes) {
+        if (nodeMatchesRelevant(node)) return true;
+      }
+    }
+    return false;
+  }
 
   function cleanText(value) {
     return String(value ?? "")
@@ -311,7 +345,7 @@
 
         showCandidatePanel(entry, result.candidates || []);
       });
-    }, 80);
+    }, 30);
   }
 
   function showSaveNotice(message) {
@@ -375,6 +409,16 @@
 
   function isVisible(element) {
     if (!element || !element.isConnected) return false;
+
+    // checkVisibility() is a single native call and is significantly
+    // cheaper than reading multiple computed-style properties per element,
+    // which matters here because isVisible() can run many times per scan.
+    if (typeof element.checkVisibility === "function") {
+      return element.checkVisibility({
+        checkOpacity: true,
+        checkVisibilityCSS: true
+      });
+    }
 
     const style = window.getComputedStyle(element);
     if (style.display === "none") return false;
@@ -1065,7 +1109,9 @@
     }
   }
 
-  state.observer = new MutationObserver(queueScan);
+  state.observer = new MutationObserver((mutations) => {
+    if (isRelevantMutationList(mutations)) queueScan();
+  });
   state.observer.observe(document.body, {
     subtree: true,
     childList: true,
