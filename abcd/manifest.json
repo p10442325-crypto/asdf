@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "KKuTu 십자말풀이 기록기",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "KKuTu Korea 십자말풀이의 문제와 정답을 자동으로 기록합니다.",
   "permissions": [
-    "storage"
+    "storage",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "*://kkutu.co.kr/*",
