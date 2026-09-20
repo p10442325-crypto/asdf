@@ -423,23 +423,13 @@
     );
   }
 
+
   function isVisible(element) {
     if (!element || !element.isConnected) return false;
-
-    // checkVisibility() is a single native call and is significantly
-    // cheaper than reading multiple computed-style properties per element,
-    // which matters here because isVisible() can run many times per scan.
-    if (typeof element.checkVisibility === "function") {
-      return element.checkVisibility({
-        checkOpacity: true,
-        checkVisibilityCSS: true
-      });
-    }
 
     const style = window.getComputedStyle(element);
     if (style.display === "none") return false;
     if (style.visibility === "hidden") return false;
-    if (Number(style.opacity) === 0) return false;
 
     // getClientRects() works for fixed/sticky/positioned elements where
     // offsetParent can legitimately be null.
