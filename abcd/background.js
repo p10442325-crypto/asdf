@@ -4,6 +4,7 @@ const CANDIDATE_STORAGE_KEY = "kkutuCrosswordCandidates";
 const memoryCandidateCache = new Map();
 const memoryQueryCache = new Map();
 const CACHE_LIMIT = 300;
+const CANDIDATE_CACHE_VERSION = "2";
 
 function cleanText(value) {
   return String(value ?? "")
@@ -400,6 +401,7 @@ function scoreCandidate(candidate, question, length, rawMean) {
 
 function requestCacheKey(question, length, rawMean) {
   return [
+    CANDIDATE_CACHE_VERSION,
     cleanText(question).normalize("NFC").toLowerCase(),
     String(rawMean ?? "").normalize("NFC"),
     Number.isInteger(length) ? length : ""
@@ -426,7 +428,7 @@ async function loadCachedCandidates(question, length, rawMean) {
     (record) => record?.requestKey === key
   );
 
-  if (Array.isArray(hit?.candidates)) {
+  if (Array.isArray(hit?.candidates) && hit.candidates.length > 0) {
     if (memoryCandidateCache.size >= CACHE_LIMIT) {
       const oldestKey = memoryCandidateCache.keys().next().value;
       memoryCandidateCache.delete(oldestKey);
@@ -576,6 +578,12 @@ function candidateKey(record) {
 }
 
 async function saveCandidates(request, result) {
+  // Do not cache a failed/empty lookup. A temporary miss should be retried
+  // next time instead of becoming a permanent cache hit.
+  if (!Array.isArray(result?.candidates) || result.candidates.length === 0) {
+    return;
+  }
+
   const loaded = await chrome.storage.local.get({
     [CANDIDATE_STORAGE_KEY]: []
   });
